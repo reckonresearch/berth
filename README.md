@@ -1,5 +1,7 @@
 # berth — inference placement primitives
 
+A [Reckon Research](https://reckonresearch.com) project.
+
 **Status: simulation-validated reference implementation. Not a hosted
 service; nothing here executes inference on real hardware.** What is real:
 the API contract (four primitives), the analytical roofline model, the
@@ -166,3 +168,8 @@ positives on stable silicon at the 0.05 threshold. Run `python demo_drift.py`.
   efficiency factors can absorb.
 - p99 TPOT is still checked against the mean (prefill-interference under
   continuous batching is not modeled); p99 TTFT is now queueing-aware.
+
+---
+
+berth is built and maintained by Reckon Research, publisher of the
+placement-premium index. Apache-2.0.
