@@ -9,4 +9,5 @@ client = PlacementClient(SimBackend(seed=0))
 sig = client.profile(WorkloadSpec(model=MODELS["llama3-8b"], target_batch=8))
 for e in client.estimate(sig):
     if e.feasible:
-        print(f"{e.silicon:<10} ${e.cost_per_mtok:6.2f}/Mtok  premium {e.placement_premium:5.0%}  {e.bound}-bound")
+        print(f"{e.silicon:<10} ${e.cost_per_mtok:6.2f}/Mtok  "
+              f"premium {e.placement_premium:5.0%}  {e.bound}-bound")
