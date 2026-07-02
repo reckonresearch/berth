@@ -29,3 +29,23 @@ def test_physics_validation_passes_on_mock(tmp_path):
                              + check_kv_slope(traces, FLEET)
                              + check_prefill(traces, FLEET)):
         assert not str(verdict).startswith("FAIL"), (name, verdict)
+
+
+def test_jsonl_schema_versioned(tmp_path):
+    import json
+
+    from bench.run_sweep import SCHEMA_VERSION
+    args = SimpleNamespace(mock=True, silicon="h100-sxm", model="llama3-8b",
+                           seed=5, grid=DEFAULT_GRID, base_url=None, model_id=None)
+    traces = run_sweep(args)
+    p = tmp_path / "t.jsonl"
+    save_jsonl(traces, str(p))
+    first = json.loads(open(p).readline())
+    assert first["schema"] == SCHEMA_VERSION
+    assert load_jsonl(str(p)) == traces
+    # Unknown version fails loud, not silent.
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"schema": 99}\n')
+    import pytest as _pt
+    with _pt.raises(ValueError, match="schema v99"):
+        load_jsonl(str(bad))

@@ -170,15 +170,30 @@ def run_sweep(args) -> list[TraceRecord]:
     return traces
 
 
+SCHEMA_VERSION = 1  # bump on any TraceRecord field change; loaders must check
+
+
 def save_jsonl(traces: list[TraceRecord], path: str) -> None:
     with open(path, "w") as f:
         for tr in traces:
-            f.write(json.dumps(tr.__dict__) + "\n")
+            f.write(json.dumps({"schema": SCHEMA_VERSION, **tr.__dict__}) + "\n")
 
 
 def load_jsonl(path: str) -> list[TraceRecord]:
+    """Versioned loader. Unversioned lines are treated as v1 (pre-versioning
+    files from this repo only); unknown versions fail loud — silently
+    misparsing external contributions is how an index corrupts."""
+    out = []
     with open(path) as f:
-        return [TraceRecord(**json.loads(line)) for line in f if line.strip()]
+        for line in f:
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            v = d.pop("schema", 1)
+            if v != SCHEMA_VERSION:
+                raise ValueError(f"trace schema v{v} unsupported (loader is v{SCHEMA_VERSION})")
+            out.append(TraceRecord(**d))
+    return out
 
 
 def main():
