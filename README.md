@@ -11,6 +11,25 @@ berth applies the Tinker slice to inference placement: The user keeps the
 policy loop (plain Python objective + constraints over `Estimate`); the
 platform keeps execution (pricing, capacity, bind/release, migration).
 
+## Scope
+
+**Now (H1):** placing inference workloads onto the right silicon — across GPU
+SKUs and across providers — under cost/latency policies you write. The
+placement premium (cost vs best feasible placement) is measurable today and
+is what this repo estimates, calibrates, and captures.
+
+**Roadmap (H2):** heterogeneous multi-silicon routing (ASIC/FPGA/CPU targets
+alongside GPUs). The estimator's silicon model is already
+architecture-agnostic; what H2 waits on is calibration data and rentable
+inventory for non-GPU targets, not new abstractions.
+
+**Research (H3):** placement-aware interconnect and scheduling below the
+software layer. Long-horizon; H1's measured premium data is the evidence
+base that justifies (or kills) it.
+
+Non-goals: berth is not an inference engine and not a model server — it
+decides *where* engines run, and stays neutral about *which* engine.
+
 ## The four primitives
 
 ```python
