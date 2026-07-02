@@ -27,8 +27,21 @@ inventory for non-GPU targets, not new abstractions.
 software layer. Long-horizon; H1's measured premium data is the evidence
 base that justifies (or kills) it.
 
+**The index layer (spans all horizons):** every measured trace recalibrates
+the fleet model, and the calibrated placement-premium index — with published
+confidence intervals and raw traces — compounds across horizons. Routing
+decisions expire in seconds; the measurement corpus does not. Premium
+durability note: per-SKU premiums compress as software stacks mature, but
+each new silicon generation ships with immature software and re-opens them,
+and cross-provider price/queue spreads persist regardless — the premium is
+a renewable resource driven by hardware release cadence, not a one-time gap.
+
 Non-goals: berth is not an inference engine and not a model server — it
 decides *where* engines run, and stays neutral about *which* engine.
+Batch/training-job placement is deliberately out of scope for now: it is
+technically easier (no latency SLO, interruptible) but already served by
+mature open-source schedulers; latency-SLO inference is where placement is
+both hard and unserved.
 
 ## The four primitives
 
