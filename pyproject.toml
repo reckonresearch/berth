@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "berth-placement"
+version = "0.4.0"
+description = "Multi-silicon router primitives for LLM inference placement — reference implementation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = []  # stdlib only, by design: auditability of the core model
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["berth*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E731"]  # lambdas as named objectives are the API's idiom
+
+[tool.ruff.lint.per-file-ignores]
+"berth/silicon.py" = ["E501"]   # aligned fleet table: alignment > line length
+"berth/workload.py" = ["E501"]  # aligned model table
+"demo*.py" = ["E501"]         # demo print-format lines: table alignment > line length
