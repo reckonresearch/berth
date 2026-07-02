@@ -1,7 +1,7 @@
 """PlacementClient: the four primitives.
 
     profile(workload)          -> ComputeSignature
-    estimate(signature)        -> list[Estimate]  (all silicon, tax annotated)
+    estimate(signature)        -> list[Estimate]  (all silicon, premium annotated)
     place(signature, policy)   -> PlacementHandle
     migrate(handle)            -> PlacementHandle (possibly moved)
 
@@ -67,7 +67,7 @@ class PlacementClient:
         return _profile(workload)
 
     def estimate(self, sig: ComputeSignature) -> list[Estimate]:
-        """Estimate across the whole fleet at current prices, tax-annotated."""
+        """Estimate across the whole fleet at current prices, premium-annotated."""
         results = [
             _estimate(
                 sig,

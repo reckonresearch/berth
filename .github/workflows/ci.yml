@@ -14,5 +14,5 @@ jobs:
       - run: pip install -e ".[dev]" ruff
       - run: ruff check berth tests bench demo.py demo_calibrate.py demo_queueing.py demo_drift.py
       - run: python -m pytest tests/ -q
-      - run: for d in demo.py demo_calibrate.py demo_queueing.py demo_drift.py; do python $d > /dev/null; done
+      - run: for d in demo.py demo_calibrate.py demo_queueing.py demo_drift.py tutorials/*.py; do python $d > /dev/null; done
       - run: pipx run pyright --level error berth || true  # advisory until annotations complete

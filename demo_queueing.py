@@ -17,12 +17,12 @@ mean_sig = client.profile(WorkloadSpec(**base, p99_ttft_ms=500.0))
 print("mean-based ranking (single replica, SLO checked against MEANS):")
 for e in client.estimate(mean_sig):
     if e.feasible:
-        print(f"  {e.silicon:<10} ${e.cost_per_mtok:>5.2f}/Mtok   tax {e.placement_premium:>4.0%}")
+        print(f"  {e.silicon:<10} ${e.cost_per_mtok:>5.2f}/Mtok   premium {e.placement_premium:>4.0%}")
 
 # --- tail-aware: 40 rps, p99 TTFT <= 500ms ----------------------------------
 tail_sig = client.profile(WorkloadSpec(**base, p99_ttft_ms=500.0, arrival_rps=40.0))
 print("\ntail-aware ranking (40 rps, p99 TTFT <= 500ms, headroom priced in):")
-print(f"  {'silicon':<10} {'repl':>4} {'util':>6} {'p99TTFT':>8} {'$/Mtok':>8} {'tax':>6}")
+print(f"  {'silicon':<10} {'repl':>4} {'util':>6} {'p99TTFT':>8} {'$/Mtok':>8} {'prem':>6}")
 for e in client.estimate(tail_sig):
     if e.feasible:
         print(f"  {e.silicon:<10} {e.replicas:>4} {e.utilization:>6.0%} "
@@ -36,6 +36,6 @@ print("\ntight SLO (p99 TTFT <= 300ms) — cheapest silicon changes:")
 for e in client.estimate(tight_sig):
     if e.feasible:
         print(f"  {e.silicon:<10} {e.replicas:>4} repl  p99 {e.p99_ttft_ms:>4.0f}ms  "
-              f"${e.cost_per_mtok:.2f}/Mtok  tax {e.placement_premium:.0%}")
+              f"${e.cost_per_mtok:.2f}/Mtok  premium {e.placement_premium:.0%}")
     else:
         print(f"  {e.silicon:<10} infeasible: {e.reason}")

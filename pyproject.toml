@@ -16,7 +16,7 @@ dependencies = []  # stdlib only, by design: auditability of the core model
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
-include = ["berth*"]
+include = ["berth*", "bench*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

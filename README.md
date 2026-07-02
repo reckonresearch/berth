@@ -2,16 +2,64 @@
 
 A [Reckon Research](https://reckonresearch.com) project.
 
-**Status: simulation-validated reference implementation. Not a hosted
-service; nothing here executes inference on real hardware.** What is real:
-the API contract (four primitives), the analytical roofline model, the
-calibration and drift machinery, and the validation harness — all of which a
-production backend implements against actual silicon by satisfying the
+[![ci](https://github.com/reckon-research/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/reckon-research/berth/actions)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
+**Where should this workload run?** berth answers that with four primitives —
+`profile / estimate / place / migrate` — over an auditable roofline model,
+trace-based calibration with confidence intervals, and tail-aware fleet
+sizing. Every estimate is annotated with its **placement premium**: the
+measured cost of running on the wrong silicon.
+
+It is not a black box that makes placement "easy". It is a clean abstraction
+that shields you from orchestration while preserving control of the policy —
+your objective and constraints are plain Python.
+
+**Status: simulation-validated reference implementation.** The API contract,
+analytical model, calibration machinery, and benchmark harness are real; the
+execution backend is a simulator until the calibration campaign publishes
+measured predicted-vs-actual error. A production backend implements the
 4-method `Backend` protocol.
 
-berth applies the Tinker slice to inference placement: The user keeps the
-policy loop (plain Python objective + constraints over `Estimate`); the
-platform keeps execution (pricing, capacity, bind/release, migration).
+## Install
+
+```bash
+git clone https://github.com/reckon-research/berth && cd berth
+pip install -e .            # stdlib-only core, no dependencies
+python -m pytest tests/ -q  # 43 tests
+```
+
+## Quickstart
+
+```python
+from berth import MODELS, PlacementClient, PlacementPolicy, SimBackend, WorkloadSpec, min_cost
+
+client = PlacementClient(SimBackend(seed=0))
+sig = client.profile(WorkloadSpec(model=MODELS["llama3-70b"], target_batch=16,
+                                  p99_ttft_ms=500.0, arrival_rps=40.0))
+for e in client.estimate(sig):                       # premium-annotated fleet table
+    if e.feasible:
+        print(e.silicon, f"${e.cost_per_mtok:.2f}/Mtok", f"premium {e.placement_premium:.0%}")
+
+handle = client.place(sig, PlacementPolicy(          # policy = plain Python
+    objective=min_cost,
+    constraints=(lambda e: e.ttft_ms < 500,),
+))
+handle = client.migrate(handle)                      # re-place on market drift
+```
+
+Tutorials (each runnable, with expected output): [101 hello](tutorials/101_hello_berth.py) ·
+[201 policies & SLOs](tutorials/201_policies_and_slos.py) ·
+[301 calibration](tutorials/301_calibrate_from_traces.py) ·
+[401 tail-aware sizing](tutorials/401_tail_aware_sizing.py).
+Concepts: [docs/concepts.md](docs/concepts.md). Real-hardware runbook: [docs/bench.md](docs/bench.md).
+
+## Where berth sits
+
+berth decides **where**; Dynamo/vLLM/SGLang run it there; SkyPilot/Kubernetes
+deploy it there. Upstream benchmarks (e.g. InferenceX) measure what hardware
+can do on canonical workloads; berth turns measurements into placement
+decisions for *your* workload, SLO, and prices.
 
 ## Scope
 

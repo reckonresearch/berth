@@ -37,7 +37,7 @@ for label, prompt in (("short-ctx chat", 512), ("long-ctx RAG", 8192)):
     sig = client.profile(WorkloadSpec(model=MODELS["llama3-70b"], target_batch=16,
                                       avg_prompt_tokens=prompt, avg_output_tokens=256))
     e = next(x for x in client.estimate(sig) if x.silicon == "mi300x" and x.feasible)
-    print(f"  {label:<16} mi300x ${e.cost_per_mtok:.2f}/Mtok  tax {e.placement_premium:.0%}")
+    print(f"  {label:<16} mi300x ${e.cost_per_mtok:.2f}/Mtok  premium {e.placement_premium:.0%}")
 
 # --- 2. drift ----------------------------------------------------------------
 def maturing(name, sig, t):

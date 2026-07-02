@@ -23,7 +23,7 @@ print(f"workload: {sig.model.name}  batch={sig.batch}  decode AI={sig.decode_ai:
 
 # 2. estimate — the placement premium table ---------------------------------------
 print(f"{'silicon':<10} {'ok':<3} {'dev':>3} {'TTFT ms':>8} {'TPOT ms':>8} {'tok/s':>7} "
-      f"{'$/Mtok':>8} {'tax':>7}  bound/reason")
+      f"{'$/Mtok':>8} {'prem':>7}  bound/reason")
 for e in client.estimate(sig):
     if e.feasible:
         print(f"{e.silicon:<10} {'y':<3} {e.n_devices:>3} {e.ttft_ms:>8.0f} {e.tpot_ms:>8.1f} "
