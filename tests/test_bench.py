@@ -49,3 +49,19 @@ def test_jsonl_schema_versioned(tmp_path):
     import pytest as _pt
     with _pt.raises(ValueError, match="schema v99"):
         load_jsonl(str(bad))
+
+
+def test_rehearsal_report_end_to_end(tmp_path):
+    """Full P0 pipeline dress rehearsal: traces -> calibrate -> physics checks
+    (zero FAILs on synthetic truth) -> report generation."""
+    from bench.report import _rehearsal_traces, build_report
+    from bench.validate import check_bandwidth, check_kv_slope, check_prefill
+    from berth import calibrate
+    traces = _rehearsal_traces()
+    fitted, _ = calibrate(FLEET, traces)
+    checks = (check_bandwidth(traces, fitted) + check_kv_slope(traces, fitted)
+              + check_prefill(traces, fitted))
+    assert not any(str(v).startswith("FAIL") for _, _, v in checks)
+    report = build_report(traces, rehearsal=True)
+    assert "REHEARSAL" in report and "premium" in report
+    assert report.count("|") > 40  # tables actually rendered

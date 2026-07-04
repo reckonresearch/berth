@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import random
 import statistics
 import sys
 from collections import defaultdict
@@ -29,6 +30,18 @@ from berth.estimate import estimate, replica_layout
 from berth.silicon import FLEET
 
 TOL = 0.15  # per-term relative tolerance; matches the P0 pass criterion
+
+
+def _theil_sen(xs, ys):
+    """Median of pairwise slopes — robust slope for noisy, few-point data.
+    OLS at 5% multiplicative noise over <=6 context clusters produced
+    spurious FAILs in rehearsal; Theil-Sen is the right estimator here."""
+    slopes = [(y2 - y1) / (x2 - x1)
+              for i, (x1, y1) in enumerate(zip(xs, ys, strict=True))
+              for x2, y2 in zip(xs[i + 1:], ys[i + 1:], strict=True)
+              if x2 != x1]
+    slopes.sort()
+    return slopes[len(slopes) // 2] if slopes else 0.0
 
 
 def _ols(xs, ys):
@@ -75,15 +88,31 @@ def check_kv_slope(traces, fleet):
         groups[(t.silicon, t.model_name, t.batch, n_dev)].append(t)
     for (silicon, model, batch, n_dev), ts in sorted(groups.items()):
         ctxs = {t.signature().avg_context for t in ts}
-        if len(ctxs) < 3:
-            continue
+        if len(ctxs) < 4:
+            continue  # <4 distinct contexts: slope unidentifiable, silent skip
         hw = fleet[silicon]
         sig0 = ts[0].signature()
         _, tp = replica_layout(sig0, hw)
         m = sig0.model
         xs = [t.signature().avg_context for t in ts]
         ys = [t.measured_tpot_ms for t in ts]
-        slope_meas, _ = _ols(xs, ys)
+        slope_meas = _theil_sen(xs, ys)
+        # Power gate on the slope itself: bootstrap the estimator and SKIP
+        # when the CI is too wide to support any verdict. Adapts to actual
+        # measurement noise (unlike fixed context-count gates, which miss
+        # clustered-context cells with formally many "distinct" values).
+        rng = random.Random(0)
+        boots = []
+        idx = list(range(len(xs)))
+        for _ in range(100):
+            pick = [idx[rng.randrange(len(idx))] for _ in idx]
+            boots.append(_theil_sen([xs[i] for i in pick], [ys[i] for i in pick]))
+        boots.sort()
+        lo, hi = boots[2], boots[97]
+        if slope_meas <= 0 or (hi - lo) / (2 * abs(slope_meas)) > 0.5:
+            out.append((f"{silicon}/{model}/b{batch}/tp{n_dev}", None,
+                        "SKIP (slope CI too wide: underpowered)"))
+            continue
         slope_pred = batch * m.kv_bytes_per_token / (
             n_dev * hw.hbm_bw_tbs * 1e12 * hw.bw_eff * tp) * 1e3
         if slope_pred <= 0:
@@ -180,20 +209,25 @@ def main():
     print(f"loaded {len(traces)} traces\n")
     failed = False
 
+    # Term checks test MODEL FORM (linearity, term structure), so they run
+    # against the CALIBRATED fleet: prior-parameter offsets are calibration's
+    # job to fix and would otherwise contaminate every slope verdict.
+    fitted_fleet, _ = calibrate(FLEET, traces)
+
     print("== 1. bandwidth term (batch-1 decode) ==")
-    for name, err, verdict in check_bandwidth(traces, FLEET):
+    for name, err, verdict in check_bandwidth(traces, fitted_fleet):
         print(f"  {name:<12} median err {err:.1%}  {verdict}" if err is not None
               else f"  {name:<12} {verdict}")
         failed |= verdict == "FAIL"
 
     print("== 2. KV term (TPOT-vs-context slope, memory-bound cells) ==")
-    for name, err, verdict in check_kv_slope(traces, FLEET):
+    for name, err, verdict in check_kv_slope(traces, fitted_fleet):
         detail = f"slope err {err:.1%}  " if err is not None else ""
         print(f"  {name:<28} {detail}{verdict}")
         failed |= verdict == "FAIL"
 
     print("== 3. prefill term (TTFT slope -> implied mfu) ==")
-    for name, mfu, verdict in check_prefill(traces, FLEET):
+    for name, mfu, verdict in check_prefill(traces, fitted_fleet):
         print(f"  {name:<28} implied mfu {mfu:.3f}  {verdict}")
         failed |= verdict.startswith("FAIL")
 

@@ -1,6 +1,12 @@
 # Running the harness on real hardware (the P0 runbook)
 
-One box, three commands. Stage on a cheap GPU (e.g. L40S ~$1/hr) before
+One box, ONE command once the server is up:
+`./bench/p0_run.sh <silicon> <model> <model_id> [base_url]` — health check,
+provenance capture (versions, clocks), microbench ceilings, randomized
+sweep, physics validation with ceiling gates, tarball for bench/data/.
+Then across all boxes: `python -m bench.report *.jsonl --out REPORT.md`
+generates the publishable report (calibration + CIs + premium tables).
+The manual steps, for understanding what the orchestrator does: Stage on a cheap GPU (e.g. L40S ~$1/hr) before
 running the full matrix.
 
 1. Boot a vLLM OpenAI-compatible server. Pin and record the version — the
