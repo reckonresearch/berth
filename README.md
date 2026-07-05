@@ -52,7 +52,7 @@ Tutorials (each runnable, with expected output): [101 hello](tutorials/101_hello
 [201 policies & SLOs](tutorials/201_policies_and_slos.py) ·
 [301 calibration](tutorials/301_calibrate_from_traces.py) ·
 [401 tail-aware sizing](tutorials/401_tail_aware_sizing.py).
-Concepts: [docs/concepts.md](docs/concepts.md). Real-hardware runbook: [docs/bench.md](docs/bench.md).
+Docs: [overview](docs/index.md) · [concepts](docs/concepts.md) · [hardware runbook](docs/bench.md).
 
 ## Where berth sits
 
