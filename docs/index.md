@@ -93,7 +93,7 @@ expected output:
 4. [401: tail-aware sizing](../tutorials/401_tail_aware_sizing.py):
    arrival rates, p99 targets, and headroom you must pay for
 
-Install: `git clone https://github.com/reckon-research/berth && cd berth
+Install: `git clone https://github.com/ReckonResearch/berth && cd berth
 && pip install -e .`. The core is stdlib-only by design.
 
 ## The index

@@ -2,7 +2,7 @@
 
 A [Reckon Research](https://reckonresearch.com) project.
 
-[![ci](https://github.com/reckon-research/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/reckon-research/berth/actions)
+[![ci](https://github.com/ReckonResearch/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/ReckonResearch/berth/actions)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 **Where should this workload run?** berth answers that with four primitives —
@@ -24,7 +24,7 @@ measured predicted-vs-actual error. A production backend implements the
 ## Install
 
 ```bash
-git clone https://github.com/reckon-research/berth && cd berth
+git clone https://github.com/ReckonResearch/berth && cd berth
 pip install -e .            # stdlib-only core, no dependencies
 python -m pytest tests/ -q  # 43 tests
 ```
