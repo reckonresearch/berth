@@ -1,7 +1,7 @@
 # berth: a placement API for inference engineers
 
-berth lets you focus on what matters in serving open-weight models — your
-workload and your policy — while it handles the placement math: which
+berth lets you focus on what matters in serving open-weight models, your
+workload and your policy, while it handles the placement math: which
 silicon, which provider, how many replicas, at what cost, under your SLO.
 
 You write a simple policy loop that runs on your laptop, including your
@@ -20,7 +20,7 @@ cross-provider GPU market while preserving your control over what
 ## What you can do with berth
 
 - **Estimate** any workload across the fleet in milliseconds: TTFT, TPOT,
-  $/Mtok, which roofline binds, and the **placement premium** — the
+  $/Mtok, which roofline binds, and the **placement premium**: the
   measured cost of running on the wrong silicon.
 - **Size fleets against tail SLOs**: give an arrival rate and a p99 TTFT
   target; get replica counts with queueing headroom priced in. The
@@ -32,7 +32,7 @@ cross-provider GPU market while preserving your control over what
   chip's real efficiency from measured TTFT/TPOT, with bootstrap 95%
   confidence intervals and blind-recovery validation.
 - **Detect software-stack drift**: a maturing runtime shows up as a
-  trending efficiency factor — the premium moving in real time.
+  trending efficiency factor: the premium moving in real time.
 
 ## Show me the code
 
@@ -65,8 +65,8 @@ Changing the model is one string. Changing what "best" means is one lambda.
 
 Engineers who serve open-weight LLM/ASR models on GPUs they rent or
 reserve, and who want the placement decision to be a measured, auditable
-computation instead of a default. If your team knows its $/Mtok by heart —
-or wants to — berth is for you.
+computation instead of a default. If your team knows its $/Mtok by heart,
+or wants to, berth is for you.
 
 ## Under the hood
 
@@ -74,27 +74,27 @@ Every estimate is closed-form and derivable by hand: a roofline model with
 quadratic-attention prefill, KV-pressure decode, MoE memory/compute
 separation, and M/M/c queueing for tails. Fitted corrections layer on top
 via trace calibration; they never replace the analytical core. Physics
-changes ship with validator changes in the same commit — the term-by-term
+changes ship with validator changes in the same commit; the term-by-term
 checks in `bench/validate.py` are the spec. Read
 [concepts](concepts.md) for the model and [the hardware runbook](bench.md)
 for measuring your own silicon.
 
 ## Getting started
 
-Work through the tutorials in order — each is runnable and states its
+Work through the tutorials in order; each is runnable and states its
 expected output:
 
-1. [101 — hello berth](../tutorials/101_hello_berth.py): profile and
+1. [101: hello berth](../tutorials/101_hello_berth.py): profile and
    estimate across the fleet
-2. [201 — policies and SLOs](../tutorials/201_policies_and_slos.py):
+2. [201: policies and SLOs](../tutorials/201_policies_and_slos.py):
    objectives, constraints, and when they disagree
-3. [301 — calibrate from traces](../tutorials/301_calibrate_from_traces.py):
+3. [301: calibrate from traces](../tutorials/301_calibrate_from_traces.py):
    fit real efficiency factors with confidence intervals
-4. [401 — tail-aware sizing](../tutorials/401_tail_aware_sizing.py):
+4. [401: tail-aware sizing](../tutorials/401_tail_aware_sizing.py):
    arrival rates, p99 targets, and headroom you must pay for
 
 Install: `git clone https://github.com/reckon-research/berth && cd berth
-&& pip install -e .` — the core is stdlib-only by design.
+&& pip install -e .`. The core is stdlib-only by design.
 
 ## The index
 
@@ -104,9 +104,9 @@ premiums across silicon and providers, with confidence intervals and raw
 traces attached. The current release is a simulation-validated reference
 implementation; measured hardware calibration is published with the index.
 Contribute traces via the
-[calibration-data template](../.github/ISSUE_TEMPLATE/calibration_data.md) —
+[calibration-data template](../.github/ISSUE_TEMPLATE/calibration_data.md);
 submissions pass the same physics gates as our own.
 
 Questions, disputes, methodology arguments: open an issue. Estimate
-disputes with traces attached get answered first — see
+disputes with traces attached get answered first. See
 [CONTRIBUTING](../CONTRIBUTING.md).
