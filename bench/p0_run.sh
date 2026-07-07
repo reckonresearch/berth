@@ -6,6 +6,8 @@
 #   ./bench/p0_run.sh <silicon> <model> <model_id> [base_url]
 #   ./bench/p0_run.sh h100-sxm llama3-8b meta-llama/Meta-Llama-3-8B http://localhost:8000
 #
+# PREREQUISITE: run ./bench/setup_env.sh ONCE on a fresh pod BEFORE starting
+# the server (fixes pyairports/HF-cache/Xet traps). Then start vLLM:
 # Assumes a vLLM OpenAI server is already running (pin the version!):
 #   python -m vllm.entrypoints.openai.api_server --model <model_id> --max-num-seqs 64
 set -euo pipefail
