@@ -34,7 +34,7 @@ from berth.workload import MODELS, WorkloadSpec, profile
 
 DEFAULT_GRID = {
     "batch": [1, 4, 8, 16, 32],
-    "prompt": [512, 2048, 8192],
+    "prompt": [512, 2048, 7680],
     "output": [128, 256],
     "reps": 3,
 }
@@ -63,34 +63,65 @@ def _stream_one(base_url: str, model_id: str, prompt_tokens: int, max_tokens: in
     resp = conn.getresponse()
     if resp.status != 200:
         raise RuntimeError(f"server returned {resp.status}: {resp.read()[:200]!r}")
+    # SSE framing note: http.client yields arbitrary byte *blocks*, not lines,
+    # and events are \n\n-delimited. We buffer bytes and emit only complete
+    # events. (Prior versions iterated `for raw in resp` and split on single
+    # \n, which fragmented events and silently dropped every token.)
     ttft = None
-    stamps = []
+    first_token_t = None
+    last_token_t = None
+    n_tokens = 0
     usage = None
-    for raw in resp:
-        for line in raw.split(b"\n"):
-            if not line.startswith(b"data: ") or line == b"data: [DONE]":
-                continue
-            payload = line[len(b"data: "):]
-            try:
-                chunk = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if chunk.get("usage"):
-                usage = chunk["usage"]     # final chunk: authoritative counts
-                continue                    # usage-only chunk is not a token
-            now = time.perf_counter()
-            if ttft is None:
-                ttft = now - t0
-            stamps.append(now)
+    buf = b""
+    done = False
+    while not done:
+        block = resp.read(1024)
+        if not block:
+            break
+        buf += block
+        while b"\n\n" in buf:
+            event, buf = buf.split(b"\n\n", 1)
+            for line in event.split(b"\n"):
+                if not line.startswith(b"data: "):
+                    continue
+                payload = line[len(b"data: "):]
+                if payload == b"[DONE]":
+                    done = True
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                # `include_usage` attaches usage to EVERY chunk here, including
+                # text-bearing ones. Capture it, but decide token-vs-skip on
+                # whether a text delta is present (not on usage's presence).
+                if chunk.get("usage"):
+                    usage = chunk["usage"]
+                ch = chunk.get("choices") or []
+                if not ch or not ch[0].get("text"):
+                    continue
+                now = time.perf_counter()
+                if ttft is None:
+                    ttft = now - t0
+                    first_token_t = now
+                last_token_t = now
+                n_tokens += 1
+            if done:
+                break
     conn.close()
-    if ttft is None or len(stamps) < 2:
+    if ttft is None or n_tokens < 2:
         raise RuntimeError("stream produced <2 tokens; check model_id / server logs")
-    gaps = [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
-    # Server-reported prompt tokens are authoritative; the "x " heuristic is
-    # only load shaping. Recording real counts is what makes prefill-FLOPs
-    # inversion trustworthy — a 15% tokenizer mismatch is a 15% mfu error.
+    # TPOT = decode wall-clock span / inter-token intervals. Timing the DECODE
+    # PHASE and dividing by real token count is insensitive to how the server
+    # batches SSE flushes. (Prior versions took median of inter-CHUNK gaps,
+    # which measured buffer-flush latency ~20us, not the ~15ms/token decode
+    # cadence — yielding TPOT ~1000x too fast and corrupting every downstream
+    # bandwidth/KV/MFU fit.) Prefer the server's completion_tokens when present.
+    served_tokens = usage.get("completion_tokens") if usage else None
+    n_for_tpot = served_tokens if served_tokens and served_tokens >= 2 else n_tokens
+    tpot = (last_token_t - first_token_t) / max(1, n_for_tpot - 1)
     prompt_tokens = usage.get("prompt_tokens") if usage else None
-    return ttft, statistics.median(gaps), prompt_tokens
+    return ttft, tpot, prompt_tokens
 
 
 def measure_cell(base_url, model_id, batch, prompt, output):

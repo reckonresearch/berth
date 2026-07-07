@@ -20,6 +20,23 @@ OUT="p0_${SILICON}_${MODEL}_${STAMP}"
 mkdir -p "$OUT"
 echo "== P0 run -> $OUT =="
 
+# --- ensure pyairports import works (vLLM 0.6.x guided-decoding pulls a broken
+# --- pyairports 0.0.1 that pip marks "satisfied" but ships no importable module).
+python - <<'PYSTUB'
+import importlib.util, os, sys
+if importlib.util.find_spec("pyairports") is None or True:
+    import site
+    sp = site.getsitepackages()[0] if hasattr(site,"getsitepackages") else "/usr/local/lib/python3.11/dist-packages"
+    d = os.path.join(sp, "pyairports")
+    try:
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d,"__init__.py"),"w").close()
+        with open(os.path.join(d,"airports.py"),"w") as f:
+            f.write("AIRPORT_LIST = []\n")
+    except Exception as e:
+        print("pyairports stub warn:", e)
+PYSTUB
+
 # 1. Server health — fail before spending an hour measuring a dead endpoint.
 curl -sf "${BASE_URL}/v1/models" > "$OUT/server_models.json" \
   || { echo "FATAL: no server at ${BASE_URL}"; exit 1; }
