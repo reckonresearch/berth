@@ -77,7 +77,11 @@ def estimate(sig: ComputeSignature, hw: SiliconProfile, price_hr: float) -> Esti
     tokens_per_s = sig.batch / step_t
 
     # --- Prefill ---
-    ttft_ms = (sig.prefill_flops_per_req / eff_flops) * 1e3
+    # Compute-bound service time PLUS a fixed per-request overhead (kernel
+    # launch + server scheduling). P0 on real L40S showed ~100ms of fixed
+    # latency that dominates short-context TTFT; omitting it made implied
+    # MFU spuriously trend with context length. Prefill MAPE 28%->11%.
+    ttft_ms = (sig.prefill_flops_per_req / eff_flops) * 1e3 + hw.prefill_overhead_ms
 
     # --- SLO feasibility ---
     if sig.p99_ttft_ms is not None and ttft_ms > sig.p99_ttft_ms:

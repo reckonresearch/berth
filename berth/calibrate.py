@@ -60,8 +60,12 @@ def _fit_one(hw: SiliconProfile, traces: list[TraceRecord], n_iters: int = 2) ->
 
             # Prefill inversion -> mfu (always valid: prefill modeled as pure compute).
             ttft_s = t.measured_ttft_ms / 1e3
+            # Subtract fixed prefill overhead before inverting to MFU, else
+            # short-context TTFT (overhead-dominated) yields spuriously low MFU
+            # that trends up with context. (P0 finding, 2026-07-07.)
+            ttft_compute_s = max(1e-6, ttft_s - hw.prefill_overhead_ms / 1e3)
             mfu_obs.append(_clamp(
-                sig.prefill_flops_per_req / (ttft_s * n_dev * hw.peak_tflops * 1e12 * tp_scale)
+                sig.prefill_flops_per_req / (ttft_compute_s * n_dev * hw.peak_tflops * 1e12 * tp_scale)
             ))
 
             # Decode inversion -> classify bound under CURRENT fit, then invert.

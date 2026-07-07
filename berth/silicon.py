@@ -22,6 +22,10 @@ class SiliconProfile:
     base_price_hr: float        # on-demand $/device-hour (reference price)
     mfu: float = 0.50           # achievable fraction of peak compute
     bw_eff: float = 0.75        # achievable fraction of peak bandwidth
+    prefill_overhead_ms: float = 0.0  # fixed per-request latency (kernel
+                                # launch + server scheduling); measured on
+                                # real hardware, ~75-145ms on L40S/vLLM. Not
+                                # compute-physics; dominates short-context TTFT.
     tp_eff: float = 0.85        # per-doubling tensor-parallel scaling efficiency
 
     @property
@@ -40,7 +44,8 @@ FLEET: dict[str, SiliconProfile] = {
         SiliconProfile("mi300x",    "gpu", peak_tflops=1307, hbm_bw_tbs=5.30, mem_gb=192, base_price_hr=2.80,
                        mfu=0.35, bw_eff=0.65),  # software maturity discount — this gap IS the placement premium source
         SiliconProfile("a100-80g",  "gpu", peak_tflops=312,  hbm_bw_tbs=2.00, mem_gb=80,  base_price_hr=1.40),
-        SiliconProfile("l40s",      "gpu", peak_tflops=362,  hbm_bw_tbs=0.864, mem_gb=48, base_price_hr=0.95),
+        SiliconProfile("l40s",      "gpu", peak_tflops=362,  hbm_bw_tbs=0.864, mem_gb=48, base_price_hr=0.95,
+                       prefill_overhead_ms=100.0),  # measured P0 2026-07-07
         SiliconProfile("cpu-spr",   "cpu", peak_tflops=8,    hbm_bw_tbs=0.30, mem_gb=512, base_price_hr=0.60,
                        mfu=0.30, bw_eff=0.60),
     ]

@@ -153,15 +153,31 @@ def check_prefill(traces, fleet):
     for t in traces:
         groups[(t.silicon, t.model_name)].append(t)
     for (silicon, model), ts in sorted(groups.items()):
-        if len({t.avg_prompt_tokens for t in ts}) < 3:
+        if len({t.avg_prompt_tokens for t in ts if t.batch == 1}) < 3:
             continue
         hw = fleet[silicon]
         pts = []
         for t in ts:
             sig = t.signature()
             n_dev, tp = replica_layout(sig, hw)
+            # Subtract fixed prefill overhead (kernel launch + scheduling) before
+            # inverting to MFU. Without this, short-context TTFT is overhead-
+            # dominated and yields spuriously low MFU that trends up with L --
+            # which this very check would misdiagnose as "attention accounting
+            # wrong". P0 on real L40S: ~100ms overhead, prefill MAPE 28%->11%.
+            # Restrict the trend test to batch==1: pure per-request prefill,
+            # where wall TTFT = overhead + compute(L) exactly (no batching
+            # interaction). Subtract the measured fixed overhead before
+            # inverting to MFU, else short-context TTFT is overhead-dominated
+            # and yields spuriously low MFU that trends up with L -- which this
+            # check would misdiagnose as "attention accounting wrong".
+            # (P0 on real L40S: ~100ms overhead; batch-1 trend flattens to ~+9%.)
+            if sig.batch != 1:
+                continue
+            ttft_compute_s = max(1e-6, t.measured_ttft_ms / 1e3
+                                 - hw.prefill_overhead_ms / 1e3)
             mfu = sig.prefill_flops_per_req / (
-                (t.measured_ttft_ms / 1e3) * n_dev * hw.peak_tflops * 1e12 * tp)
+                ttft_compute_s * n_dev * hw.peak_tflops * 1e12 * tp)
             pts.append((t.avg_prompt_tokens, mfu))
         med = statistics.median(m for _, m in pts)
         slope, _ = _ols([p for p, _ in pts], [m for _, m in pts])
