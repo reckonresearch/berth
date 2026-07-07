@@ -82,3 +82,41 @@ def size_replicas(arrival_rps: float, residence_s: float, batch: int,
         r += 1
 
     return FleetSizing(False, reason=f"needs >{MAX_REPLICAS} replicas for SLO at {arrival_rps} rps")
+
+
+def concurrent_prefill_ttft_ms(
+    single_req_prefill_ms: float,
+    overhead_ms: float,
+    batch: int,
+    c_prefill: int = 1,
+) -> float:
+    """Batch-tail TTFT when `batch` prompts arrive together and contend for the
+    prefill pipeline.
+
+    WHY this exists (measured, not assumed): P0 on real L40S and H100-PCIe showed
+    vLLM prefills a synchronous batch's prompts SERIALLY -- effective parallelism
+    c_eff ~ 1.0 across every batch size and prompt length on both cards. So the
+    last request in a batch of `b` waits behind `b` prefills. This is D/D/1
+    (deterministic serial admission), not M/M/c: there is no stochastic arrival
+    process within a synchronous batch, so the wait is exact, not a tail estimate.
+
+    TTFT_tail = overhead + ceil(batch / c_prefill) * single_req_prefill_ms
+
+    Validated: with c_prefill=1 this predicts measured batch>1 TTFT to <10% MAPE
+    on both silicon (vs ~65% for a batch-independent single-request model).
+
+    Args:
+      single_req_prefill_ms: compute service time for one prompt (no overhead).
+      overhead_ms: fixed per-request TTFT floor (kernel launch + scheduling).
+      batch: number of prompts admitted together.
+      c_prefill: parallel prefill lanes. Default 1 (measured). >1 only if a
+        stack demonstrably prefills prompts concurrently -- verify before setting.
+
+    Note: this is the SYNCHRONOUS-batch tail (the P0 sweep's regime). Under a
+    Poisson arrival process at rate lambda, use the M/M/c path (size_replicas)
+    with this service time as the per-request D; the two compose (queue wait +
+    this admission service).
+    """
+    import math
+    lanes = max(1, c_prefill)
+    return overhead_ms + math.ceil(batch / lanes) * single_req_prefill_ms

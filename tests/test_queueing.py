@@ -97,3 +97,22 @@ def test_client_end_to_end_with_arrival_rate():
     best = ests[0]
     assert best.placement_premium == pytest.approx(0.0)
     assert all(e.p99_ttft_ms is not None and e.p99_ttft_ms <= 500.0 for e in ests)
+
+
+def test_concurrent_prefill_serial_matches_measured_law():
+    """Serial prefill (c=1): batch-tail TTFT = overhead + batch*single_req.
+
+    Validated against real L40S + H100-PCIe P0 traces (c_eff ~ 1.0, <10% MAPE).
+    """
+    from berth.queueing import concurrent_prefill_ttft_ms
+    # H100-PCIe measured params: floor 54.6ms, single-req prefill at L=2050 ~ 112ms
+    overhead, single_req = 54.6, 112.0
+    # batch=1 -> just overhead + one prefill
+    assert abs(concurrent_prefill_ttft_ms(single_req, overhead, 1) - (overhead + single_req)) < 1e-6
+    # batch=8 -> overhead + 8 prefills (serial). Measured L=2050 b=8 was ~879ms.
+    got = concurrent_prefill_ttft_ms(single_req, overhead, 8)
+    assert abs(got - (overhead + 8 * single_req)) < 1e-6
+    assert 800 < got < 1000     # measured ~879ms
+    # c_prefill=2 halves the batch term (only if a stack prefills 2 concurrently)
+    par = concurrent_prefill_ttft_ms(single_req, overhead, 8, c_prefill=2)
+    assert par < got

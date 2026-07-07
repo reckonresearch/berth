@@ -81,7 +81,15 @@ def estimate(sig: ComputeSignature, hw: SiliconProfile, price_hr: float) -> Esti
     # launch + server scheduling). P0 on real L40S showed ~100ms of fixed
     # latency that dominates short-context TTFT; omitting it made implied
     # MFU spuriously trend with context length. Prefill MAPE 28%->11%.
-    ttft_ms = (sig.prefill_flops_per_req / eff_flops) * 1e3 + hw.prefill_overhead_ms
+    # Base TTFT is the SINGLE-REQUEST prefill service time: fixed overhead +
+    # per-request compute. The concurrent/batched TTFT (where prompts contend
+    # for the serial prefill pipeline) is a QUEUEING quantity computed in the
+    # arrival-rate path below via `prefill_service_ms`, not a property of one
+    # request's first-token latency. Keeping the batch term OUT of the base
+    # estimate is the correct layer separation (base = service time; p99 =
+    # service + wait under the arrival process).
+    prefill_service_ms = (sig.prefill_flops_per_req / eff_flops) * 1e3
+    ttft_ms = hw.prefill_overhead_ms + prefill_service_ms
 
     # --- SLO feasibility ---
     if sig.p99_ttft_ms is not None and ttft_ms > sig.p99_ttft_ms:
