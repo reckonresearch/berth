@@ -62,6 +62,16 @@ def test_moe_memory_vs_compute_split():
     assert moe.tpot_ms < 25            # but only 22B active params per token
 
 
+def test_qwen3_30b_a3b_single_card_moe_cell():
+    # Step-1 cell: Qwen3-30B-A3B (30.5B/3.3B, GQA) must fit ONE MI300X so the
+    # MoE-break + cross-vendor AMD run is TP1 (cheap, ~$2.80/hr).
+    e = estimate(sig_for(model="qwen3-30b-a3b", target_batch=8),
+                 FLEET["mi300x"], FLEET["mi300x"].base_price_hr)
+    assert e.feasible and e.n_devices == 1        # ~61GB bf16 fits one 192GB card
+    assert MODELS["qwen3-30b-a3b"].active_params_b == 3.3
+    assert e.tpot_ms < 15                          # decode on 3.3B active, not 30.5B total
+
+
 def test_mixtral_single_card_moe_cell():
     # Single-card MoE fallback: Mixtral-8x7B (46.7B total / 12.9B active) must fit
     # ONE MI300X (93GB bf16 << 192GB) so the model-shape cell is runnable without TP.

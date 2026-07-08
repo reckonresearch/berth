@@ -110,6 +110,10 @@ MODELS: dict[str, ModelSpec] = {
         # Single-card MoE cell: 235B needs 470GB bf16 (>1 MI300X); Mixtral fits (93GB) and
         # still breaks the dense-matmul assumption (active 12.9B != total 46.7B). 8 experts, top-2.
         ModelSpec("mixtral-8x7b", total_params_b=46.7, active_params_b=12.9, n_layers=32, n_kv_heads=8, head_dim=128, n_heads=32),
+        # Current single-card MoE cell (Apache-2.0, GQA): 30.5B total / 3.3B active,
+        # 128 experts top-8, 48 layers, 32 Q / 4 KV heads, head_dim 128 (Qwen3
+        # decouples head_dim from hidden). ~61GB bf16 -> fits 1 MI300X. [CONFIG: HF card]
+        ModelSpec("qwen3-30b-a3b", total_params_b=30.5, active_params_b=3.3, n_layers=48, n_kv_heads=4, head_dim=128, n_heads=32),
         # MLA MoE (DeepSeek-lineage). KV is a compressed latent, NOT per-head K/V:
         # kv_lora_rank=512 + qk_rope_head_dim=64 per layer. V3 and R1 share the
         # arch; head_dim/n_heads feed only the attention-FLOPs proxy (KV ignores
