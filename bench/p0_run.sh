@@ -47,6 +47,7 @@ curl -sf "${BASE_URL}/v1/models" > "$OUT/server_models.json" \
 {
   echo "date_utc: $STAMP"; echo "silicon: $SILICON"; echo "model: $MODEL"
   echo "model_id: $MODEL_ID"; echo "base_url: $BASE_URL"
+  echo "quant: w_bytes=${WEIGHT_BYTES:-2.0} kv_bytes=${KV_BYTES:-2.0}"
   echo "--- vllm ---"; pip show vllm 2>/dev/null | head -2 || echo "vllm: not local"
   echo "--- gpu ---"
   nvidia-smi --query-gpu=name,driver_version,clocks.sm,clocks.mem,power.limit \
@@ -64,8 +65,13 @@ else
 fi
 
 # 4. Sweep (randomized order, warm-up discarded, usage-based token counts).
+# Quant of the served model, bytes per weight/KV element: WEIGHT_BYTES/KV_BYTES
+# (bf16=2, fp8/int8=1, fp4/int4=0.5). Recorded per trace so a fp8 cell is
+# inverted as fp8, never silently compared to bf16.  Example (fp8 weights):
+#   WEIGHT_BYTES=1.0 ./bench/p0_run.sh mi300x qwen3-235b-moe Qwen/Qwen3-235B-A22B-FP8
 python -m bench.run_sweep --base-url "$BASE_URL" --silicon "$SILICON" \
-  --model "$MODEL" --model-id "$MODEL_ID" --out "$OUT/traces.jsonl"
+  --model "$MODEL" --model-id "$MODEL_ID" --out "$OUT/traces.jsonl" \
+  --weight-bytes "${WEIGHT_BYTES:-2.0}" --kv-bytes "${KV_BYTES:-2.0}"
 
 # 5. Term-by-term physics validation (with ceilings when available).
 if [[ -n "$BW" && -n "$FLOPS" ]]; then
