@@ -48,5 +48,14 @@ FLEET: dict[str, SiliconProfile] = {
                        prefill_overhead_ms=100.0),  # measured P0 2026-07-07
         SiliconProfile("cpu-spr",   "cpu", peak_tflops=8,    hbm_bw_tbs=0.30, mem_gb=512, base_price_hr=0.60,
                        mfu=0.30, bw_eff=0.60),
+        # TPU: systolic-array (non-SIMT) accelerator. The cross-architecture
+        # generalization test -- if the roofline (peak compute + bandwidth)
+        # predicts a TPU, the physics is not GPU-specific. Single-chip VMs
+        # (v6e-1 / v5e-1) mirror the single-accelerator GPU runs. Specs: v6e
+        # (Trillium) 918 BF16 TFLOPS / 32GB / 1.64 TB/s; v5e 197 / 16GB / 0.819.
+        # prefill_overhead_ms left 0.0 -> fit from batch=1 traces post-run (XLA
+        # first-compile is warm-up, excluded; steady-state floor is what we fit).
+        SiliconProfile("tpu-v6e",   "tpu", peak_tflops=918,  hbm_bw_tbs=1.64, mem_gb=32,  base_price_hr=4.20),
+        SiliconProfile("tpu-v5e",   "tpu", peak_tflops=197,  hbm_bw_tbs=0.819, mem_gb=16, base_price_hr=1.20),
     ]
 }
