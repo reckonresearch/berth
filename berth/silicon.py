@@ -57,6 +57,12 @@ FLEET: dict[str, SiliconProfile] = {
     for p in [
         SiliconProfile("h100-sxm",  "gpu", peak_tflops=989,  hbm_bw_tbs=3.35, mem_gb=80,  base_price_hr=3.20, fp8_tflops=1979),
         SiliconProfile("h200-sxm",  "gpu", peak_tflops=989,  hbm_bw_tbs=4.80, mem_gb=141, base_price_hr=3.90, fp8_tflops=1979),
+        # Blackwell flagship. Dense tensor specs [CONFIG: NVIDIA B200 datasheet]:
+        # BF16 2250 / FP8 4500 / FP4 9000 TFLOPS; 180GB HBM3e @ 8 TB/s; ~$4.99/hr
+        # RunPod. The ONLY fleet member with a native fp4 path -> validates the
+        # fp4 branch of peak_tflops_for that MI300X (CDNA3) cannot exercise.
+        SiliconProfile("b200",      "gpu", peak_tflops=2250, hbm_bw_tbs=8.0,  mem_gb=180, base_price_hr=4.99,
+                       fp8_tflops=4500, fp4_tflops=9000),
         SiliconProfile("mi300x",    "gpu", peak_tflops=1307, hbm_bw_tbs=5.30, mem_gb=192, base_price_hr=2.80,
                        mfu=0.35, bw_eff=0.65, fp8_tflops=2615),  # CDNA3 fp8 ~2x bf16. mfu gap = software-maturity premium source
         SiliconProfile("a100-80g",  "gpu", peak_tflops=312,  hbm_bw_tbs=2.00, mem_gb=80,  base_price_hr=1.40),  # Ampere: no native fp8 -> fp8_tflops None

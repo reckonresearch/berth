@@ -62,6 +62,19 @@ def test_moe_memory_vs_compute_split():
     assert moe.tpot_ms < 25            # but only 22B active params per token
 
 
+def test_b200_has_native_fp4_path():
+    # B200 is the only fleet card with a real fp4 pipe; MI300X (CDNA3) falls back.
+    b200 = FLEET["b200"]
+    assert b200.peak_tflops_for(0.5) == 9000          # fp4 (native, Blackwell)
+    assert b200.peak_tflops_for(1.0) == 4500          # fp8
+    assert b200.peak_tflops_for(2.0) == 2250          # bf16
+    assert FLEET["mi300x"].peak_tflops_for(0.5) == FLEET["mi300x"].fp8_tflops  # CDNA3: no fp4
+    # Run-1 models fit one B200 (180GB): MoE + MLA measurable on a single card.
+    for mdl in ("qwen3-30b-a3b", "deepseek-v2-lite"):
+        e = estimate(sig_for(model=mdl, target_batch=8), b200, b200.base_price_hr)
+        assert e.feasible and e.n_devices == 1
+
+
 def test_qwen3_30b_a3b_single_card_moe_cell():
     # Step-1 cell: Qwen3-30B-A3B (30.5B/3.3B, GQA) must fit ONE MI300X so the
     # MoE-break + cross-vendor AMD run is TP1 (cheap, ~$2.80/hr).
