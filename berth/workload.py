@@ -41,6 +41,9 @@ MODELS: dict[str, ModelSpec] = {
         ModelSpec("llama3-8b",   total_params_b=8,   active_params_b=8,   n_layers=32, n_kv_heads=8, head_dim=128, n_heads=32),
         ModelSpec("llama3-70b",  total_params_b=70,  active_params_b=70,  n_layers=80, n_kv_heads=8, head_dim=128, n_heads=64),
         ModelSpec("qwen3-235b-moe", total_params_b=235, active_params_b=22, n_layers=94, n_kv_heads=4, head_dim=128, n_heads=64),
+        # Single-card MoE cell: 235B needs 470GB bf16 (>1 MI300X); Mixtral fits (93GB) and
+        # still breaks the dense-matmul assumption (active 12.9B != total 46.7B). 8 experts, top-2.
+        ModelSpec("mixtral-8x7b", total_params_b=46.7, active_params_b=12.9, n_layers=32, n_kv_heads=8, head_dim=128, n_heads=32),
     ]
 }
 

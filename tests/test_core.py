@@ -62,6 +62,17 @@ def test_moe_memory_vs_compute_split():
     assert moe.tpot_ms < 25            # but only 22B active params per token
 
 
+def test_mixtral_single_card_moe_cell():
+    # Single-card MoE fallback: Mixtral-8x7B (46.7B total / 12.9B active) must fit
+    # ONE MI300X (93GB bf16 << 192GB) so the model-shape cell is runnable without TP.
+    e = estimate(sig_for(model="mixtral-8x7b", target_batch=8),
+                 FLEET["mi300x"], FLEET["mi300x"].base_price_hr)
+    assert e.feasible and e.n_devices == 1     # 93GB weights fit one 192GB card
+    # Decode keyed on ACTIVE (12.9B), not total: TPOT well under a dense-46.7B model.
+    dense_46b = MODELS["mixtral-8x7b"].active_params_b == 12.9
+    assert dense_46b and e.tpot_ms < 20        # active-param bandwidth, not total
+
+
 def test_infeasible_when_too_large_for_node():
     # int4 would fit; fp16 235B + heavy KV on 48GB cards blows the 8-device cap.
     e = estimate(sig_for(model="qwen3-235b-moe", target_batch=64, avg_prompt_tokens=8192),
