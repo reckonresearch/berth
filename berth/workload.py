@@ -31,14 +31,23 @@ class ModelSpec:
     attn: str = "gqa"
     kv_lora_rank: int = 0           # MLA: KV compression dim (0 for GQA)
     qk_rope_head_dim: int = 0       # MLA: decoupled RoPE key dim (0 for GQA)
+    # Explicit quant format labels. bytes_per_* set the physics (footprint,
+    # bandwidth); these name the FORMAT for provenance, since byte-count alone
+    # can't tell fp8 from int8 (both 1 byte) or fp4 from int4. Empty -> derive
+    # a coarse label from the byte count.
+    weight_fmt: str = ""
+    kv_fmt: str = ""
+
+    ATTN_FAMILIES = ("gqa", "mla", "sparse")
 
     def __post_init__(self):
         # Fail fast and loud: an MLA spec with no latent dim would silently fall
-        # back to a wrong number. Validate the invariant at construction.
+        # back to a wrong number. Validate invariants at construction.
+        if self.attn not in self.ATTN_FAMILIES:
+            raise ValueError(f"{self.name}: unknown attn family {self.attn!r} "
+                             f"(known: {self.ATTN_FAMILIES})")
         if self.attn == "mla" and self.kv_lora_rank <= 0:
             raise ValueError(f"{self.name}: attn='mla' requires kv_lora_rank > 0")
-        if self.attn not in ("gqa", "mla"):
-            raise ValueError(f"{self.name}: unknown attn family {self.attn!r}")
 
     @property
     def weight_bytes(self) -> float:
@@ -46,33 +55,49 @@ class ModelSpec:
 
     @property
     def kv_bytes_per_token(self) -> float:
+        if self.attn == "sparse":
+            # Sparse attention (DeepSeek-V4 CSA/HCA, etc.) selects a runtime
+            # top-k of KV entries; the resident footprint is NOT a closed-form
+            # per-token constant and depends on the selection budget. Fail loud
+            # rather than silently reuse a wrong (MLA or GQA) formula — this is a
+            # THIRD KV regime, not covered yet. See FLAG: sparse-KV term.
+            raise NotImplementedError(
+                f"{self.name}: sparse-attention KV footprint not modeled "
+                "(runtime top-k selection); do not estimate until a sparse term lands")
         if self.attn == "mla":
             # MLA caches ONE low-rank latent (kv_lora_rank) plus the decoupled
             # RoPE key (qk_rope_head_dim) per layer — reconstructing per-head K/V
             # on the fly via absorbed up-projections. No factor of 2 (a single
             # shared latent, not separate K and V) and no n_kv_heads (the latent
-            # is head-agnostic). This is ~50x smaller than the GQA form for a
-            # model of DeepSeek's shape; using the GQA formula overpredicts KV
-            # footprint by that factor and flips memory-bound TPOT the wrong way.
+            # is head-agnostic). ~50x smaller than the GQA form for DeepSeek's
+            # shape; the GQA formula overpredicts KV by that factor. Oracle: the
+            # DeepSeek reference impl caches kv_cache[kv_lora_rank] + pe_cache
+            # [qk_rope_head_dim] — this formula mirrors those two buffers.
             return self.n_layers * (self.kv_lora_rank + self.qk_rope_head_dim) * self.bytes_per_kv
         # GQA/MHA: separate K and V, per KV head, per layer.
         return 2 * self.n_layers * self.n_kv_heads * self.head_dim * self.bytes_per_kv
 
+    @staticmethod
+    def _fmt(bytes_per: float, explicit: str) -> str:
+        if explicit:
+            return explicit
+        return {2.0: "bf16", 1.0: "8bit", 0.5: "4bit"}.get(bytes_per, f"{bytes_per * 8:g}bit")
+
     @property
     def quant_label(self) -> str:
-        # Provenance: a fp8 measurement is not comparable to a bf16 one. Every
-        # premium-table cell must carry this so quant never gets conflated.
-        names = {2.0: "bf16", 1.0: "fp8", 0.5: "fp4"}
-        w = names.get(self.bytes_per_param, f"{self.bytes_per_param * 8:g}bit")
-        kv = names.get(self.bytes_per_kv, f"{self.bytes_per_kv * 8:g}bit")
-        return f"w:{w}/kv:{kv}"
+        # Provenance: a fp8 measurement is not comparable to a bf16 one, and
+        # fp8 != int8 even at equal byte-count. Prefer the explicit format.
+        return f"w:{self._fmt(self.bytes_per_param, self.weight_fmt)}/kv:{self._fmt(self.bytes_per_kv, self.kv_fmt)}"
 
-    def quantized(self, w_bytes: float, kv_bytes: float | None = None) -> "ModelSpec":
+    def quantized(self, w_bytes: float, kv_bytes: float | None = None,
+                  w_fmt: str = "", kv_fmt: str = "") -> "ModelSpec":
         """Return a quantized variant. KV is often kept higher-precision than
-        weights (e.g. fp8 weights, bf16 KV), so kv_bytes is set independently."""
+        weights (e.g. fp8 weights, bf16 KV), so kv_bytes is set independently.
+        w_fmt/kv_fmt name the format explicitly (fp8 vs int8) for provenance."""
         from dataclasses import replace
         return replace(self, bytes_per_param=w_bytes,
-                       bytes_per_kv=self.bytes_per_kv if kv_bytes is None else kv_bytes)
+                       bytes_per_kv=self.bytes_per_kv if kv_bytes is None else kv_bytes,
+                       weight_fmt=w_fmt, kv_fmt=kv_fmt or self.kv_fmt)
 
 
 # Presets with real architecture numbers (GQA models — KV heads << attn heads).
@@ -92,6 +117,11 @@ MODELS: dict[str, ModelSpec] = {
         # them once their published kv_lora_rank is confirmed (don't fabricate).
         ModelSpec("deepseek-v3", total_params_b=671, active_params_b=37, n_layers=61, n_kv_heads=128, head_dim=128, n_heads=128, attn="mla", kv_lora_rank=512, qk_rope_head_dim=64),
         ModelSpec("deepseek-r1", total_params_b=671, active_params_b=37, n_layers=61, n_kv_heads=128, head_dim=128, n_heads=128, attn="mla", kv_lora_rank=512, qk_rope_head_dim=64),
+        # DeepSeek-V2-Lite: independent MLA config (27 layers, same rank 512 / rope 64,
+        # 15.7B/2.4B). Two purposes: (1) de-circularizes the MLA KV test — a different
+        # layer count proves the term scales with L, not a hardcoded constant; (2) fits
+        # ONE MI300X (~31GB), so measured-MLA validation costs $2.80/hr, not an 8x node.
+        ModelSpec("deepseek-v2-lite", total_params_b=15.7, active_params_b=2.4, n_layers=27, n_kv_heads=16, head_dim=128, n_heads=16, attn="mla", kv_lora_rank=512, qk_rope_head_dim=64),
     ]
 }
 

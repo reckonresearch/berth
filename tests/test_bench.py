@@ -51,6 +51,34 @@ def test_jsonl_schema_versioned(tmp_path):
         load_jsonl(str(bad))
 
 
+def test_v1_traces_load_as_bf16(tmp_path):
+    # The 60-trace P0 files are schema v1 (no quant fields). They must keep
+    # loading, defaulted to bf16 — not rejected by the v2 loader.
+    p = tmp_path / "v1.jsonl"
+    p.write_text('{"schema": 1, "silicon": "h100-pcie", "model_name": "llama3-8b", '
+                 '"batch": 1, "avg_prompt_tokens": 512, "avg_output_tokens": 128, '
+                 '"measured_ttft_ms": 100.0, "measured_tpot_ms": 10.0, "t": 0.0}\n')
+    tr = load_jsonl(str(p))
+    assert len(tr) == 1 and tr[0].w_bytes == 2.0 and tr[0].kv_bytes == 2.0
+
+
+def test_fp8_trace_roundtrips_and_signature_is_quantized(tmp_path):
+    # FLAG 2 end-to-end: a fp8 cell must persist its quant AND be inverted as fp8.
+    from berth import MODELS
+    from berth.traces import TraceRecord
+    fp8 = TraceRecord(silicon="mi300x", model_name="deepseek-v3", batch=8,
+                      avg_prompt_tokens=2048, avg_output_tokens=128,
+                      measured_ttft_ms=200.0, measured_tpot_ms=12.0,
+                      w_bytes=1.0, kv_bytes=2.0)
+    p = tmp_path / "fp8.jsonl"
+    save_jsonl([fp8], str(p))
+    assert load_jsonl(str(p)) == [fp8]                       # quant survives round-trip
+    # The reconstructed signature must carry fp8 weight bytes, not the bf16 default.
+    sig = fp8.signature()
+    assert sig.model.bytes_per_param == 1.0
+    assert sig.model.weight_bytes == MODELS["deepseek-v3"].weight_bytes / 2
+
+
 def test_rehearsal_report_end_to_end(tmp_path):
     """Full P0 pipeline dress rehearsal: traces -> calibrate -> physics checks
     (zero FAILs on synthetic truth) -> report generation."""

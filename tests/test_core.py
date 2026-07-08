@@ -75,12 +75,60 @@ def test_mixtral_single_card_moe_cell():
 
 def test_mla_kv_is_compressed_latent_not_per_head():
     # FLAG 1: MLA caches one latent (kv_lora_rank) + rope key per layer, not
-    # per-head K/V. DeepSeek-V3 published config: 61 layers, rank 512, rope 64.
+    # per-head K/V. Independent oracle: DeepSeek's reference impl caches exactly
+    # kv_cache[kv_lora_rank] + pe_cache[qk_rope_head_dim] (V3 report, model.py).
+    # De-circularized with TWO configs of different depth so the term is proven
+    # to scale with n_layers, not echo a single hardcoded constant.
+    v3 = MODELS["deepseek-v3"]        # 61 layers, rank 512, rope 64
+    lite = MODELS["deepseek-v2-lite"] # 27 layers, rank 512, rope 64
+    assert v3.kv_bytes_per_token == 61 * (512 + 64) * 2       # 70,272 B/token @ bf16
+    assert lite.kv_bytes_per_token == 27 * (512 + 64) * 2     # 31,104 B/token @ bf16
+    # Structural invariant (the real de-circularizer): same per-layer latent,
+    # so the ratio must equal the layer-count ratio — impossible to satisfy with
+    # a hardcoded constant.
+    assert v3.kv_bytes_per_token / lite.kv_bytes_per_token == pytest.approx(61 / 27)
+    # Headline: vs a 128-head MHA baseline for V3's shape, MLA is >50x smaller.
+    mha_v3 = 2 * v3.n_layers * 128 * v3.head_dim * v3.bytes_per_kv
+    assert v3.kv_bytes_per_token < mha_v3 / 50
+
+
+def test_sparse_attention_fails_loud_not_silent():
+    # FLAG 1 coverage: DeepSeek-V4-class sparse attention (CSA/HCA) is a THIRD
+    # KV regime. It must raise, not silently reuse the MLA/GQA formula.
+    s = ModelSpec("v4-like", total_params_b=100, active_params_b=10, n_layers=40,
+                  n_kv_heads=8, head_dim=128, n_heads=64, attn="sparse")
+    with pytest.raises(NotImplementedError, match="sparse"):
+        _ = s.kv_bytes_per_token
+    with pytest.raises(ValueError, match="unknown attn"):
+        ModelSpec("bad", total_params_b=1, active_params_b=1, n_layers=1,
+                  n_kv_heads=1, head_dim=1, n_heads=1, attn="linear")
+
+
+def test_dtype_peak_is_not_blind():
+    # FLAG 2 physics: fp8 runs on different tensor units. MI300X does fp8 at ~2x
+    # bf16; A100 (Ampere) has no fp8 path -> must fall back to bf16 peak.
+    mi = FLEET["mi300x"]
+    assert mi.peak_tflops_for(1.0) == 2615          # fp8
+    assert mi.peak_tflops_for(2.0) == mi.peak_tflops # bf16
+    assert mi.peak_tflops_for(0.5) == 2615          # fp4 has no CDNA3 path -> fp8 pipe
+    a100 = FLEET["a100-80g"]
+    assert a100.peak_tflops_for(1.0) == a100.peak_tflops  # no native fp8: no speedup
+    # And it flows through: an fp8 Llama-70B on MI300X is compute-faster than bf16
+    # in the compute-bound regime (same bytes-halved memory win either way).
+    hw = FLEET["mi300x"]
+    bf16 = estimate(sig_for(model="llama3-70b", target_batch=32, avg_prompt_tokens=256),
+                    hw, hw.base_price_hr)
+    fp8 = estimate(profile(WorkloadSpec(model=MODELS["llama3-70b"].quantized(1.0),
+                   target_batch=32, avg_prompt_tokens=256)), hw, hw.base_price_hr)
+    assert fp8.ttft_ms <= bf16.ttft_ms              # prefill is compute-bound; fp8 peak higher
+
+
+def test_explicit_quant_format_distinguishes_fp8_from_int8():
+    # FLAG 2 provenance: byte-count alone can't tell fp8 from int8. Explicit wins.
     ds = MODELS["deepseek-v3"]
-    assert ds.kv_bytes_per_token == 61 * (512 + 64) * 2      # 70,272 bytes/token @ bf16
-    # The bug we're fixing: the GQA/MHA formula would overpredict by ~57x.
-    mha_naive = 2 * ds.n_layers * ds.n_kv_heads * ds.head_dim * ds.bytes_per_kv
-    assert ds.kv_bytes_per_token < mha_naive / 50
+    assert ds.quantized(1.0, w_fmt="fp8").quant_label == "w:fp8/kv:bf16"
+    assert ds.quantized(1.0, w_fmt="int8").quant_label == "w:int8/kv:bf16"
+    assert ds.quantized(1.0).quant_label == "w:8bit/kv:bf16"   # unlabeled -> coarse
 
 
 def test_mla_spec_fails_loud_without_latent():
@@ -94,10 +142,11 @@ def test_quant_provenance_labels_and_scales():
     # FLAG 2: quant is a comparability axis; weights and KV quantize independently.
     ds = MODELS["deepseek-v3"]
     assert ds.quant_label == "w:bf16/kv:bf16"
-    fp8 = ds.quantized(1.0)                       # fp8 weights, KV left at bf16
-    assert fp8.weight_bytes == ds.weight_bytes / 2
-    assert fp8.quant_label == "w:fp8/kv:bf16"
-    assert ds.quantized(1.0, 1.0).quant_label == "w:fp8/kv:fp8"
+    q8 = ds.quantized(1.0)                        # 1-byte weights, KV left at bf16
+    assert q8.weight_bytes == ds.weight_bytes / 2
+    # Byte-count alone is coarse ("8bit") — fp8 vs int8 needs an explicit fmt.
+    assert q8.quant_label == "w:8bit/kv:bf16"
+    assert ds.quantized(1.0, 1.0).quant_label == "w:8bit/kv:8bit"
 
 
 def test_deepseek_mla_fits_one_mi300x_node():

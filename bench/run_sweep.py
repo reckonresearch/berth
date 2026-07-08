@@ -194,6 +194,8 @@ def run_sweep(args) -> list[TraceRecord]:
                         avg_output_tokens=output,
                         measured_ttft_ms=ttft_ms, measured_tpot_ms=tpot_ms,
                         t=total / 1000.0,
+                        w_bytes=getattr(args, "weight_bytes", 2.0),
+                        kv_bytes=getattr(args, "kv_bytes", 2.0),
                     ))
                     total += 1
                     print(f"[{total}] b={batch} p={prompt} o={output} "
@@ -201,7 +203,7 @@ def run_sweep(args) -> list[TraceRecord]:
     return traces
 
 
-SCHEMA_VERSION = 1  # bump on any TraceRecord field change; loaders must check
+SCHEMA_VERSION = 2  # v2 adds w_bytes/kv_bytes (quant). v1 files load as bf16.
 
 
 def save_jsonl(traces: list[TraceRecord], path: str) -> None:
@@ -221,7 +223,13 @@ def load_jsonl(path: str) -> list[TraceRecord]:
                 continue
             d = json.loads(line)
             v = d.pop("schema", 1)
-            if v != SCHEMA_VERSION:
+            if v == 1:
+                # Pre-quant traces predate w_bytes/kv_bytes; they were all bf16.
+                # Migrate forward by defaulting, don't reject — the 60-trace P0
+                # files are v1 and must keep loading.
+                d.setdefault("w_bytes", 2.0)
+                d.setdefault("kv_bytes", 2.0)
+            elif v != SCHEMA_VERSION:
                 raise ValueError(f"trace schema v{v} unsupported (loader is v{SCHEMA_VERSION})")
             out.append(TraceRecord(**d))
     return out
@@ -236,6 +244,11 @@ def main():
     p.add_argument("--mock", action="store_true", help="analytical truth + noise, no GPU")
     p.add_argument("--out", default="traces.jsonl")
     p.add_argument("--seed", type=int, default=0)
+    # Quant of the served model, bytes per weight/KV element (bf16=2, fp8/int8=1,
+    # fp4/int4=0.5). Recorded per trace so a fp8 cell is inverted as fp8, never
+    # silently compared to bf16 in the premium table.
+    p.add_argument("--weight-bytes", type=float, default=2.0)
+    p.add_argument("--kv-bytes", type=float, default=2.0)
     args = p.parse_args()
     if not args.mock and not (args.base_url and args.model_id):
         p.error("real mode requires --base-url and --model-id (or pass --mock)")

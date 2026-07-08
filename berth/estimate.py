@@ -63,7 +63,7 @@ def estimate(sig: ComputeSignature, hw: SiliconProfile, price_hr: float) -> Esti
     n_dev, tp_scale = replica_layout(sig, hw)
     if n_dev > 8:
         return Estimate(hw.name, feasible=False, reason=f"needs {n_dev} devices (>8/node)")
-    eff_flops = n_dev * hw.peak_tflops * 1e12 * hw.mfu * tp_scale
+    eff_flops = n_dev * hw.peak_tflops_for(m.bytes_per_param) * 1e12 * hw.mfu * tp_scale
     eff_bw = n_dev * hw.hbm_bw_tbs * 1e12 * hw.bw_eff * tp_scale
 
     # --- Decode (steady state) ---

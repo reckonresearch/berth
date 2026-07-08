@@ -27,10 +27,19 @@ class TraceRecord:
     measured_ttft_ms: float
     measured_tpot_ms: float
     t: float = 0.0                  # normalized observation time in [0, 1]
+    # Quant of THIS measured cell. Not cosmetic: a fp8 cell must be inverted
+    # against a fp8 signature (weights/KV bytes + dtype peak), or the fitted
+    # mfu/bw_eff silently absorb the dtype delta and corrupt the premium.
+    # Default 2.0/2.0 = bf16, so pre-quant (schema v1) traces load unchanged.
+    w_bytes: float = 2.0
+    kv_bytes: float = 2.0
 
     def signature(self, models: dict[str, ModelSpec] = MODELS):
+        model = models[self.model_name]
+        if (self.w_bytes, self.kv_bytes) != (model.bytes_per_param, model.bytes_per_kv):
+            model = model.quantized(self.w_bytes, self.kv_bytes)
         return profile(WorkloadSpec(
-            model=models[self.model_name],
+            model=model,
             avg_prompt_tokens=self.avg_prompt_tokens,
             avg_output_tokens=self.avg_output_tokens,
             target_batch=self.batch,

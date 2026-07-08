@@ -70,6 +70,18 @@ def build_report(traces, rehearsal: bool) -> str:
                f"{rep.mape_prior:.1%} → calibrated {rep.mape_calibrated:.1%} · "
                f"Physics checks: {n_pass} PASS / {n_fail} FAIL / {n_skip} SKIP")
 
+    # Provenance: name the quant mix. A premium computed across cells at
+    # different precisions is not apples-to-apples unless the reader is told.
+    from collections import Counter
+    quant_mix = Counter(
+        MODELS[t.model_name].quantized(t.w_bytes, t.kv_bytes).quant_label
+        for t in traces if t.model_name in MODELS
+    )
+    if len(quant_mix) > 1 or (quant_mix and "w:bf16/kv:bf16" not in quant_mix):
+        mix = " · ".join(f"{lbl}: {n}" for lbl, n in quant_mix.most_common())
+        out.append(f"\n> **Quant mix (not all bf16):** {mix}. "
+                   "Premiums mix precisions; compare within a precision.")
+
     out.append("\n## Calibrated efficiency factors (95% bootstrap CIs)\n")
     out.append("| silicon | n | mfu [CI] | bw_eff [CI] |")
     out.append("|---|---|---|---|")
