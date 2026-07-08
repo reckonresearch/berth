@@ -21,8 +21,24 @@ class ModelSpec:
     n_kv_heads: int
     head_dim: int
     n_heads: int                    # query heads; d_attn = n_heads * head_dim
-    bytes_per_param: float = 2.0    # fp16 weights; 1.0 for int8, 0.5 for int4
+    bytes_per_param: float = 2.0    # fp16 weights; 1.0 for fp8/int8, 0.5 for fp4/int4
     bytes_per_kv: float = 2.0       # fp16 KV cache
+    # Attention family sets the KV-cache STRUCTURE, not just its size. "gqa"
+    # covers MHA/GQA (MHA == GQA with n_kv_heads == n_heads). "mla" (DeepSeek,
+    # Kimi, Mistral-Large-3) caches a compressed latent, a fundamentally
+    # different footprint — see kv_bytes_per_token. Baking GQA in as the only
+    # form was a convention, not a law; MLA is half the open frontier.
+    attn: str = "gqa"
+    kv_lora_rank: int = 0           # MLA: KV compression dim (0 for GQA)
+    qk_rope_head_dim: int = 0       # MLA: decoupled RoPE key dim (0 for GQA)
+
+    def __post_init__(self):
+        # Fail fast and loud: an MLA spec with no latent dim would silently fall
+        # back to a wrong number. Validate the invariant at construction.
+        if self.attn == "mla" and self.kv_lora_rank <= 0:
+            raise ValueError(f"{self.name}: attn='mla' requires kv_lora_rank > 0")
+        if self.attn not in ("gqa", "mla"):
+            raise ValueError(f"{self.name}: unknown attn family {self.attn!r}")
 
     @property
     def weight_bytes(self) -> float:
@@ -30,8 +46,33 @@ class ModelSpec:
 
     @property
     def kv_bytes_per_token(self) -> float:
-        # K and V, per layer: n_kv_heads * head_dim elements each.
+        if self.attn == "mla":
+            # MLA caches ONE low-rank latent (kv_lora_rank) plus the decoupled
+            # RoPE key (qk_rope_head_dim) per layer — reconstructing per-head K/V
+            # on the fly via absorbed up-projections. No factor of 2 (a single
+            # shared latent, not separate K and V) and no n_kv_heads (the latent
+            # is head-agnostic). This is ~50x smaller than the GQA form for a
+            # model of DeepSeek's shape; using the GQA formula overpredicts KV
+            # footprint by that factor and flips memory-bound TPOT the wrong way.
+            return self.n_layers * (self.kv_lora_rank + self.qk_rope_head_dim) * self.bytes_per_kv
+        # GQA/MHA: separate K and V, per KV head, per layer.
         return 2 * self.n_layers * self.n_kv_heads * self.head_dim * self.bytes_per_kv
+
+    @property
+    def quant_label(self) -> str:
+        # Provenance: a fp8 measurement is not comparable to a bf16 one. Every
+        # premium-table cell must carry this so quant never gets conflated.
+        names = {2.0: "bf16", 1.0: "fp8", 0.5: "fp4"}
+        w = names.get(self.bytes_per_param, f"{self.bytes_per_param * 8:g}bit")
+        kv = names.get(self.bytes_per_kv, f"{self.bytes_per_kv * 8:g}bit")
+        return f"w:{w}/kv:{kv}"
+
+    def quantized(self, w_bytes: float, kv_bytes: float | None = None) -> "ModelSpec":
+        """Return a quantized variant. KV is often kept higher-precision than
+        weights (e.g. fp8 weights, bf16 KV), so kv_bytes is set independently."""
+        from dataclasses import replace
+        return replace(self, bytes_per_param=w_bytes,
+                       bytes_per_kv=self.bytes_per_kv if kv_bytes is None else kv_bytes)
 
 
 # Presets with real architecture numbers (GQA models — KV heads << attn heads).
@@ -44,6 +85,13 @@ MODELS: dict[str, ModelSpec] = {
         # Single-card MoE cell: 235B needs 470GB bf16 (>1 MI300X); Mixtral fits (93GB) and
         # still breaks the dense-matmul assumption (active 12.9B != total 46.7B). 8 experts, top-2.
         ModelSpec("mixtral-8x7b", total_params_b=46.7, active_params_b=12.9, n_layers=32, n_kv_heads=8, head_dim=128, n_heads=32),
+        # MLA MoE (DeepSeek-lineage). KV is a compressed latent, NOT per-head K/V:
+        # kv_lora_rank=512 + qk_rope_head_dim=64 per layer. V3 and R1 share the
+        # arch; head_dim/n_heads feed only the attention-FLOPs proxy (KV ignores
+        # them for attn='mla'). Kimi K2.6 and Mistral-Large-3 are also MLA — add
+        # them once their published kv_lora_rank is confirmed (don't fabricate).
+        ModelSpec("deepseek-v3", total_params_b=671, active_params_b=37, n_layers=61, n_kv_heads=128, head_dim=128, n_heads=128, attn="mla", kv_lora_rank=512, qk_rope_head_dim=64),
+        ModelSpec("deepseek-r1", total_params_b=671, active_params_b=37, n_layers=61, n_kv_heads=128, head_dim=128, n_heads=128, attn="mla", kv_lora_rank=512, qk_rope_head_dim=64),
     ]
 }
 

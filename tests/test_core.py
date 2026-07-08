@@ -13,7 +13,7 @@ from berth import (
     min_cost,
 )
 from berth.estimate import estimate
-from berth.workload import profile
+from berth.workload import ModelSpec, profile
 
 
 def sig_for(model="llama3-70b", **kw):
@@ -71,6 +71,43 @@ def test_mixtral_single_card_moe_cell():
     # Decode keyed on ACTIVE (12.9B), not total: TPOT well under a dense-46.7B model.
     dense_46b = MODELS["mixtral-8x7b"].active_params_b == 12.9
     assert dense_46b and e.tpot_ms < 20        # active-param bandwidth, not total
+
+
+def test_mla_kv_is_compressed_latent_not_per_head():
+    # FLAG 1: MLA caches one latent (kv_lora_rank) + rope key per layer, not
+    # per-head K/V. DeepSeek-V3 published config: 61 layers, rank 512, rope 64.
+    ds = MODELS["deepseek-v3"]
+    assert ds.kv_bytes_per_token == 61 * (512 + 64) * 2      # 70,272 bytes/token @ bf16
+    # The bug we're fixing: the GQA/MHA formula would overpredict by ~57x.
+    mha_naive = 2 * ds.n_layers * ds.n_kv_heads * ds.head_dim * ds.bytes_per_kv
+    assert ds.kv_bytes_per_token < mha_naive / 50
+
+
+def test_mla_spec_fails_loud_without_latent():
+    # An MLA spec with no latent dim would silently emit a wrong number.
+    with pytest.raises(ValueError, match="kv_lora_rank"):
+        ModelSpec("bad-mla", total_params_b=1, active_params_b=1, n_layers=1,
+                  n_kv_heads=1, head_dim=1, n_heads=1, attn="mla")
+
+
+def test_quant_provenance_labels_and_scales():
+    # FLAG 2: quant is a comparability axis; weights and KV quantize independently.
+    ds = MODELS["deepseek-v3"]
+    assert ds.quant_label == "w:bf16/kv:bf16"
+    fp8 = ds.quantized(1.0)                       # fp8 weights, KV left at bf16
+    assert fp8.weight_bytes == ds.weight_bytes / 2
+    assert fp8.quant_label == "w:fp8/kv:bf16"
+    assert ds.quantized(1.0, 1.0).quant_label == "w:fp8/kv:fp8"
+
+
+def test_deepseek_mla_fits_one_mi300x_node():
+    ds = MODELS["deepseek-v3"]
+    e_bf16 = estimate(sig_for(model="deepseek-v3", target_batch=8),
+                      FLEET["mi300x"], FLEET["mi300x"].base_price_hr)
+    assert e_bf16.feasible and e_bf16.n_devices <= 8   # 1.34TB bf16 on an 8x192GB node
+    e_fp8 = estimate(profile(WorkloadSpec(model=ds.quantized(1.0), target_batch=8)),
+                     FLEET["mi300x"], FLEET["mi300x"].base_price_hr)
+    assert e_fp8.n_devices < e_bf16.n_devices          # fp8 halves the weight footprint
 
 
 def test_infeasible_when_too_large_for_node():
