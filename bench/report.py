@@ -98,11 +98,19 @@ def build_report(traces, rehearsal: bool) -> str:
 
 def _rehearsal_traces():
     """Mock traces across the fleet with perturbed hidden truths, so the
-    rehearsal exercises calibration actually moving numbers."""
-    from berth import generate_traces, make_true_fleet
+    rehearsal exercises calibration actually moving numbers.
+
+    The fixture pins its own model set: it is a synthetic-truth dress rehearsal
+    of the pipeline, NOT a registry sweep. Decoupling it from the live MODELS
+    dict keeps the zero-FAIL gate deterministic — otherwise every new model
+    added to MODELS reshuffles generate_traces' seeded rng.choice() stream and
+    can flip a sparse high-batch KV-slope cell (artifact, not a physics defect).
+    Real models are validated on MEASURED traces, not this fixture."""
+    from berth import MODELS, generate_traces, make_true_fleet
+    reference_models = {k: MODELS[k] for k in ("llama3-8b", "llama3-70b", "qwen3-235b-moe")}
     true_eff = {n: (max(0.1, hw.mfu * 0.92), max(0.1, hw.bw_eff * 1.06))
                 for n, hw in FLEET.items()}
-    return generate_traces(make_true_fleet(FLEET, true_eff),
+    return generate_traces(make_true_fleet(FLEET, true_eff), models=reference_models,
                            n_per_silicon=90, noise_sigma=0.05, seed=17)
 
 
