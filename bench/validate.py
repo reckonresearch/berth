@@ -223,6 +223,18 @@ def main():
 
     traces = [t for f in args.files for t in load_jsonl(f)]
     print(f"loaded {len(traces)} traces\n")
+
+    # Apply the fitted prefill floor, if supplied, to the silicon under test.
+    # Applied here rather than stored in FLEET so the spec table stays vendor
+    # facts while the calibration output is an explicit, logged run parameter.
+    if args.prefill_overhead_ms is not None:
+        import dataclasses
+        _measured = sorted({t.silicon for t in traces})
+        for _s in _measured:
+            FLEET[_s] = dataclasses.replace(
+                FLEET[_s], prefill_overhead_ms=args.prefill_overhead_ms)
+        print(f"[applied prefill_overhead_ms={args.prefill_overhead_ms} "
+              f"to {_measured}]\n")
     failed = False
 
     # Term checks test MODEL FORM (linearity, term structure), so they run
