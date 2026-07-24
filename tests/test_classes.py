@@ -102,7 +102,12 @@ def _rocm_maturing(name, s, t):
 
 @pytest.fixture(scope="module")
 def drift_signals():
-    traces = generate_traces(FLEET, n_per_silicon=120, noise_sigma=0.05,
+    # Density raised from 120 to 360 per silicon. Prefill MFU is now inverted
+    # from batch == 1 cells only (contention-free), so a fixed trace budget
+    # yields ~1/k the prefill observations for a k-way batch grid. Drift
+    # detection is correspondingly data-hungrier. The detection threshold is
+    # unchanged at 0.05; only the fixture's sample size moves.
+    traces = generate_traces(FLEET, n_per_silicon=360, noise_sigma=0.05,
                              seed=13, eff_fn=_rocm_maturing)
     return detect_drift(FLEET, traces, n_windows=5, threshold=0.05)
 

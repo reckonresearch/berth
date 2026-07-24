@@ -257,7 +257,15 @@ def main():
 
     if args.bw_ceiling_gbps or args.flops_ceiling_tflops:
         print("== 5. ceiling check (fitted <= microbenched <= peak) ==")
+        # Scope: ONLY the silicon actually present in these traces. The ceiling
+        # is microbenched on the box under test, so comparing another card's
+        # fit against it is a category error, and any silicon absent from the
+        # traces still carries its untouched prior (bw_eff default), so a
+        # verdict for it is vacuous. Both were emitted by earlier builds.
+        measured_silicon = {t.silicon for t in traces}
         for s, (_mfu, bw) in report.fitted.items():
+            if s not in measured_silicon:
+                continue
             hw = FLEET[s]
             if args.bw_ceiling_gbps:
                 fitted_bw = bw * hw.hbm_bw_tbs * 1000
@@ -265,6 +273,8 @@ def main():
                 print(f"  {s} fitted BW {fitted_bw:.0f} GB/s vs ceiling "
                       f"{args.bw_ceiling_gbps:.0f}: {'PASS' if ok else 'FAIL (harness bug)'}")
                 failed |= not ok
+        for s in sorted(set(report.fitted) - measured_silicon):
+            print(f"  {s} SKIP (not in these traces; carries prior, not a fit)")
 
     sys.exit(1 if failed else 0)
 
