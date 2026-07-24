@@ -102,8 +102,33 @@ def _fit_one(hw: SiliconProfile, traces: list[TraceRecord], n_iters: int = 2) ->
 
 
 def _mape(fleet: dict[str, SiliconProfile], traces: list[TraceRecord]) -> float:
-    """Mean absolute % error on TTFT and TPOT predictions over traces."""
+    """Mean absolute % error on TTFT and TPOT predictions over traces.
+
+    WARNING, and it is emitted at runtime: `estimate().ttft_ms` is a SINGLE
+    REQUEST's prefill service time by deliberate layer separation (base =
+    service time; the queueing path adds wait). Harnesses that submit a batch
+    concurrently record the batch TAIL. P0 measured that no request emits a
+    first token until EVERY prompt in the batch has been prefilled, so a
+    batched trace's TTFT is `floor + batch * single_prefill`, not
+    `floor + single_prefill`.
+
+    Scoring one against the other compares incommensurable quantities and
+    reports a large, misleading error. On the P0 traces it read 31.9% and 30.0%
+    against a 15% gate; scored against the batch-tail quantity actually
+    measured, the same model reads 4.4% and 4.7%. Callers with batch > 1 traces
+    should score against `queueing.concurrent_prefill_ttft_ms(
+    ttft_ms - prefill_overhead_ms, prefill_overhead_ms, batch)`.
+    """
     from .estimate import estimate
+    batched = {t.batch for t in traces if t.batch > 1}
+    if batched:
+        import warnings
+        warnings.warn(
+            f"_mape is scoring single-request TTFT against traces containing "
+            f"batch sizes {sorted(batched)}. Batched traces record the batch "
+            f"TAIL, so the reported TTFT error is inflated and not "
+            f"interpretable as model accuracy. See _mape.__doc__.",
+            RuntimeWarning, stacklevel=2)
     errs: list[float] = []
     for t in traces:
         hw = fleet[t.silicon]
