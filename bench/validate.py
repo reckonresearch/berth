@@ -218,6 +218,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("files", nargs="+")
     p.add_argument("--bw-ceiling-gbps", type=float, help="microbenched bandwidth")
+    p.add_argument("--prefill-overhead-ms", type=float, default=None,
+                   help="fitted fixed prefill floor for the silicon under test. "
+                        "This is a calibration OUTPUT, not a vendor fact: FLEET "
+                        "ships 0.0. Passing it explicitly keeps a validation run "
+                        "fully specified by its command line.")
     p.add_argument("--flops-ceiling-tflops", type=float, help="microbenched GEMM")
     args = p.parse_args()
 
