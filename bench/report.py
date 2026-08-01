@@ -13,7 +13,7 @@ Usage:
 
 import argparse
 
-from bench.run_sweep import load_jsonl
+from bench.sounding import load_jsonl
 from bench.validate import check_bandwidth, check_kv_slope, check_prefill
 from berth import FLEET, MODELS, PlacementClient, SimBackend, WorkloadSpec, calibrate
 

@@ -12,6 +12,9 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Reckon Research" }]
 dependencies = []  # stdlib only, by design: auditability of the core model
 
+[project.scripts]
+berth = "berth.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 

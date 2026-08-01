@@ -1,7 +1,7 @@
 """Smoke test: the P0 pipeline (mock sweep -> JSONL -> calibrate) end to end."""
 from types import SimpleNamespace
 
-from bench.run_sweep import DEFAULT_GRID, load_jsonl, run_sweep, save_jsonl
+from bench.sounding import DEFAULT_GRID, load_jsonl, run_sweep, save_jsonl
 from berth import FLEET
 from berth.calibrate import calibrate
 
@@ -34,7 +34,7 @@ def test_physics_validation_passes_on_mock(tmp_path):
 def test_jsonl_schema_versioned(tmp_path):
     import json
 
-    from bench.run_sweep import SCHEMA_VERSION
+    from bench.sounding import SCHEMA_VERSION
     args = SimpleNamespace(mock=True, silicon="h100-sxm", model="llama3-8b",
                            seed=5, grid=DEFAULT_GRID, base_url=None, model_id=None)
     traces = run_sweep(args)
