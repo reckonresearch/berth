@@ -9,9 +9,9 @@ import argparse
 import json
 import sys
 
+from berth.estimate import estimate
 from berth.silicon import FLEET
 from berth.workload import MODELS, WorkloadSpec, profile
-from berth.estimate import estimate
 
 # Silicon validated against real hardware traces (P0). Everything else is a
 # spec-sheet prior, and the CLI says so on every line it prints.
@@ -79,8 +79,8 @@ def cmd_premium(args):
         sys.exit("no feasible placement in the requested set")
     cheapest_k, cheapest_e = min(feasible, key=lambda r: r[1].cost_per_mtok)
     print(f"# {args.model}  batch={args.batch}  cheapest feasible: {cheapest_k}")
-    print(f"# numbers are PREDICTED (berth roofline). For measured premia see the "
-          f"published traces; pass real prices with --prices to match your deployment.")
+    print("# numbers are PREDICTED (berth roofline). For measured premia see the "
+          "published traces; pass real prices with --prices to match your deployment.")
     for k, e in sorted(feasible, key=lambda r: r[1].cost_per_mtok):
         prem = e.cost_per_mtok / cheapest_e.cost_per_mtok
         tag = "MEASURED" if k in MEASURED else "prior"

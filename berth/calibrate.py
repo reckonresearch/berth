@@ -74,7 +74,8 @@ def _fit_one(hw: SiliconProfile, traces: list[TraceRecord], n_iters: int = 2) ->
                 # MFU that trends up with context. (P0 finding.)
                 ttft_compute_s = max(1e-6, ttft_s - hw.prefill_overhead_ms / 1e3)
                 mfu_obs.append(_clamp(
-                    sig.prefill_flops_per_req / (ttft_compute_s * n_dev * hw.peak_tflops * 1e12 * tp_scale)
+                    sig.prefill_flops_per_req
+                    / (ttft_compute_s * n_dev * hw.peak_tflops * 1e12 * tp_scale)
                 ))
 
             # Decode inversion -> classify bound under CURRENT fit, then invert.

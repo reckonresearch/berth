@@ -19,6 +19,9 @@ from berth.traces import generate_traces, make_true_fleet
 
 # Hidden truth (unknown to the fitter). MI300X software gap worse than prior;
 # H100 bandwidth efficiency better than prior.
+# This is a SUBSET of FLEET on purpose: the demo can only report recovery for
+# silicon whose truth it invented. Reporting loops below iterate TRUE_EFF, not
+# FLEET, so adding an accelerator to the registry never breaks this demo.
 TRUE_EFF = {
     "h100-sxm": (0.44, 0.82), "h200-sxm": (0.55, 0.70), "mi300x": (0.30, 0.50),
     "a100-80g": (0.52, 0.78), "l40s": (0.45, 0.70), "cpu-spr": (0.25, 0.55),
@@ -31,8 +34,10 @@ print(f"generated {len(traces)} traces (5% measurement noise)\n")
 calibrated, report = calibrate(FLEET, traces)
 
 print(f"{'silicon':<10} {'n':>4}   {'mfu prior->fit (true)':<26} {'bw_eff prior->fit (true)':<26}")
-for name in FLEET:
+for name in TRUE_EFF:
     p = FLEET[name]
+    if name not in report.fitted:
+        continue
     f_mfu, f_bw = report.fitted[name]
     t_mfu, t_bw = TRUE_EFF[name]
     print(f"{name:<10} {report.n_traces[name]:>4}   "

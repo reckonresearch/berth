@@ -9,5 +9,5 @@ from bench.sounding import main
 if __name__ == "__main__":
     import warnings
     warnings.warn("bench.run_sweep is renamed to bench.sounding; update your command",
-                  DeprecationWarning)
+                  DeprecationWarning, stacklevel=2)
     main()

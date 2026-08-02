@@ -16,7 +16,6 @@ from .estimate import estimate
 from .silicon import SiliconProfile
 from .workload import MODELS, ModelSpec, WorkloadSpec, profile
 
-
 SOURCES = ("measured", "mock")
 
 
