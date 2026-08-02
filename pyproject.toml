@@ -4,13 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "berth-placement"
-version = "0.4.0"
+version = "0.5.0"
 description = "Multi-silicon router primitives for LLM inference placement — reference implementation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Reckon Research" }]
 dependencies = []  # stdlib only, by design: auditability of the core model
+
+[project.urls]
+Homepage = "https://www.reckonresearch.com/berth"
+Documentation = "https://docs.reckonresearch.com"
+Repository = "https://github.com/ReckonResearch/berth"
+Changelog = "https://github.com/ReckonResearch/berth/blob/main/CHANGELOG.md"
 
 [project.scripts]
 berth = "berth.cli:main"
