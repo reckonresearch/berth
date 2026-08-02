@@ -1,0 +1,21 @@
+# Gate on contributed traces. The corpus is the asset, and its only guarantee
+# is that every cell was observed on hardware. One simulated file admitted by
+# accident destroys that guarantee invisibly, so the check is mechanical.
+name: contributed-trace-provenance
+
+on:
+  pull_request:
+    paths:
+      - "data/contributed/**"
+
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: reject mock or unlabelled traces
+        run: python -m bench.check_contributed data/contributed/

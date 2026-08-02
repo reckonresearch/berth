@@ -24,7 +24,7 @@ import statistics
 import sys
 from collections import defaultdict
 
-from bench.run_sweep import load_jsonl
+from bench.sounding import load_jsonl, provenance_of
 from berth.calibrate import calibrate
 from berth.estimate import estimate, replica_layout
 from berth.silicon import FLEET
@@ -218,11 +218,34 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("files", nargs="+")
     p.add_argument("--bw-ceiling-gbps", type=float, help="microbenched bandwidth")
+    p.add_argument("--prefill-overhead-ms", type=float, default=None,
+                   help="fitted fixed prefill floor for the silicon under test. "
+                        "This is a calibration OUTPUT, not a vendor fact: FLEET "
+                        "ships 0.0. Passing it explicitly keeps a validation run "
+                        "fully specified by its command line.")
     p.add_argument("--flops-ceiling-tflops", type=float, help="microbenched GEMM")
     args = p.parse_args()
 
     traces = [t for f in args.files for t in load_jsonl(f)]
+    kind = provenance_of(traces)
+    if kind == "mock":
+        print("WARNING: mock traces. Nothing below is a hardware measurement.\n"
+              "         Calibrating on mock output recovers the model that\n"
+              "         generated it. Do not publish and do not contribute.\n")
+    print(f"provenance: {kind}  ({len(traces)} traces)")
     print(f"loaded {len(traces)} traces\n")
+
+    # Apply the fitted prefill floor, if supplied, to the silicon under test.
+    # Applied here rather than stored in FLEET so the spec table stays vendor
+    # facts while the calibration output is an explicit, logged run parameter.
+    if args.prefill_overhead_ms is not None:
+        import dataclasses
+        _measured = sorted({t.silicon for t in traces})
+        for _s in _measured:
+            FLEET[_s] = dataclasses.replace(
+                FLEET[_s], prefill_overhead_ms=args.prefill_overhead_ms)
+        print(f"[applied prefill_overhead_ms={args.prefill_overhead_ms} "
+              f"to {_measured}]\n")
     failed = False
 
     # Term checks test MODEL FORM (linearity, term structure), so they run
@@ -257,7 +280,15 @@ def main():
 
     if args.bw_ceiling_gbps or args.flops_ceiling_tflops:
         print("== 5. ceiling check (fitted <= microbenched <= peak) ==")
+        # Scope: ONLY the silicon actually present in these traces. The ceiling
+        # is microbenched on the box under test, so comparing another card's
+        # fit against it is a category error, and any silicon absent from the
+        # traces still carries its untouched prior (bw_eff default), so a
+        # verdict for it is vacuous. Both were emitted by earlier builds.
+        measured_silicon = {t.silicon for t in traces}
         for s, (_mfu, bw) in report.fitted.items():
+            if s not in measured_silicon:
+                continue
             hw = FLEET[s]
             if args.bw_ceiling_gbps:
                 fitted_bw = bw * hw.hbm_bw_tbs * 1000
@@ -265,6 +296,8 @@ def main():
                 print(f"  {s} fitted BW {fitted_bw:.0f} GB/s vs ceiling "
                       f"{args.bw_ceiling_gbps:.0f}: {'PASS' if ok else 'FAIL (harness bug)'}")
                 failed |= not ok
+        for s in sorted(set(report.fitted) - measured_silicon):
+            print(f"  {s} SKIP (not in these traces; carries prior, not a fit)")
 
     sys.exit(1 if failed else 0)
 

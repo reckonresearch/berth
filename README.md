@@ -1,6 +1,6 @@
 # berth — inference placement primitives
 
-A [Reckon Research](https://reckonresearch.com) project.
+A [Reckon Research](https://www.reckonresearch.com/berth) project. Docs: [docs.reckonresearch.com](https://docs.reckonresearch.com).
 
 [![ci](https://github.com/ReckonResearch/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/ReckonResearch/berth/actions)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -15,18 +15,42 @@ It is not a black box that makes placement "easy". It is a clean abstraction
 that shields you from orchestration while preserving control of the policy —
 your objective and constraints are plain Python.
 
-**Status: simulation-validated reference implementation.** The API contract,
-analytical model, calibration machinery, and benchmark harness are real; the
-execution backend is a simulator until the calibration campaign publishes
-measured predicted-vs-actual error. A production backend implements the
-4-method `Backend` protocol.
+**Status: validated against measured hardware on two cells.** P0 ran
+Llama-3-8B under vLLM on a rented NVIDIA L40S and H100 PCIe, 60 traces each,
+and scored the estimator against what the hardware did. Using untuned
+spec-sheet priors, decode latency predicts to 10.6% (L40S) and 4.2% (H100
+PCIe) against a 15% gate published before the first run. Everything else in
+the fleet is a spec-sheet prior and is labelled `prior` on every line the CLI
+prints. The market backend is a seeded simulator; a production backend
+implements the 4-method `Backend` protocol.
+
+Full results, including two unresolved discrepancies and three instrument
+defects that all understated the model:
+[Validation (P0)](https://docs.reckonresearch.com/validation-p0/).
 
 ## Install
 
 ```bash
+pip install berth-placement          # the CLI command is berth
+```
+
+The distribution is `berth-placement`; the command it installs is `berth`. The
+short name on PyPI belongs to an unrelated project.
+
+A first number needs no Python:
+
+```bash
+berth estimate --model llama3-8b --batch 32
+berth premium  --model llama3-8b --prices l40s=0.99 h100-pcie=3.35
+berth list                            # fleet and models, each tagged MEASURED or prior
+```
+
+From source, to run the tests and the measurement harness:
+
+```bash
 git clone https://github.com/ReckonResearch/berth && cd berth
 pip install -e .            # stdlib-only core, no dependencies
-python -m pytest tests/ -q  # 43 tests
+python -m pytest tests/ -q  # 61 tests
 ```
 
 ## Quickstart
@@ -221,3 +245,32 @@ positives on stable silicon at the 0.05 threshold. Run `python demo_drift.py`.
 
 berth is built and maintained by Reckon Research, publisher of the
 placement-premium index. Apache-2.0.
+
+## Verify it, and tell us where it is wrong
+
+berth ships `sounding`, the same harness that produced its own validation data.
+Point it at a model server you already run, then score the estimator against
+what your hardware actually did:
+
+```bash
+python -m bench.sounding --base-url http://localhost:8000 \
+    --silicon h100-pcie --model llama3-8b --model-id meta-llama/Meta-Llama-3-8B \
+    --out traces.jsonl
+python -m bench.fit_overhead traces.jsonl            # fit your own prefill floor
+python -m bench.validate     traces.jsonl --prefill-overhead-ms <fitted>
+```
+
+The prefill floor is a property of one (accelerator, driver, server, config)
+tuple and is not predictable from a spec sheet: it measured 74.6 ms on the L40S
+and 54.6 ms on the H100 PCIe. Profiles ship 0.0 and every run fits its own. Do
+not carry someone else's.
+
+Every record carries `source`, `measured` or `mock`, written by the harness.
+`bench.validate` refuses a file mixing the two, and CI rejects any contribution
+containing a mock record or a record without explicit provenance. A mock trace
+and a hardware trace are otherwise indistinguishable on disk, and the corpus is
+worth exactly as much as that distinction.
+
+If berth misses on your silicon, open an issue with your `traces.jsonl`
+attached. Disputes that arrive with traces outrank everything else, and
+unfavorable results publish.

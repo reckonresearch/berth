@@ -58,15 +58,24 @@ def _fit_one(hw: SiliconProfile, traces: list[TraceRecord], n_iters: int = 2) ->
                 continue
             m = sig.model
 
-            # Prefill inversion -> mfu (always valid: prefill modeled as pure compute).
-            ttft_s = t.measured_ttft_ms / 1e3
-            # Subtract fixed prefill overhead before inverting to MFU, else
-            # short-context TTFT (overhead-dominated) yields spuriously low MFU
-            # that trends up with context. (P0 finding, 2026-07-07.)
-            ttft_compute_s = max(1e-6, ttft_s - hw.prefill_overhead_ms / 1e3)
-            mfu_obs.append(_clamp(
-                sig.prefill_flops_per_req / (ttft_compute_s * n_dev * hw.peak_tflops * 1e12 * tp_scale)
-            ))
+            # Prefill inversion -> mfu. Restricted to batch == 1, mirroring
+            # bench.validate.check_prefill. prefill_flops_per_req is a SINGLE
+            # request's work, but P0 measured that a synchronous batch is
+            # prefilled SERIALLY (c_eff ~ 1.0 on L40S and H100 PCIe). Pooling
+            # batches therefore attributes `batch` sequential prefills to one
+            # request's compute and drags the fit toward zero (measured: 0.064
+            # pooled vs 0.44 batch-1 on the same traces), which then poisons
+            # every compute-bound TPOT prediction downstream. Batch-1 cells are
+            # contention-free and are the only valid inversion.
+            if sig.batch == 1:
+                ttft_s = t.measured_ttft_ms / 1e3
+                # Subtract the fixed prefill overhead before inverting, else
+                # short-context TTFT (overhead-dominated) yields spuriously low
+                # MFU that trends up with context. (P0 finding.)
+                ttft_compute_s = max(1e-6, ttft_s - hw.prefill_overhead_ms / 1e3)
+                mfu_obs.append(_clamp(
+                    sig.prefill_flops_per_req / (ttft_compute_s * n_dev * hw.peak_tflops * 1e12 * tp_scale)
+                ))
 
             # Decode inversion -> classify bound under CURRENT fit, then invert.
             tpot_s = t.measured_tpot_ms / 1e3
@@ -93,8 +102,33 @@ def _fit_one(hw: SiliconProfile, traces: list[TraceRecord], n_iters: int = 2) ->
 
 
 def _mape(fleet: dict[str, SiliconProfile], traces: list[TraceRecord]) -> float:
-    """Mean absolute % error on TTFT and TPOT predictions over traces."""
+    """Mean absolute % error on TTFT and TPOT predictions over traces.
+
+    WARNING, and it is emitted at runtime: `estimate().ttft_ms` is a SINGLE
+    REQUEST's prefill service time by deliberate layer separation (base =
+    service time; the queueing path adds wait). Harnesses that submit a batch
+    concurrently record the batch TAIL. P0 measured that no request emits a
+    first token until EVERY prompt in the batch has been prefilled, so a
+    batched trace's TTFT is `floor + batch * single_prefill`, not
+    `floor + single_prefill`.
+
+    Scoring one against the other compares incommensurable quantities and
+    reports a large, misleading error. On the P0 traces it read 31.9% and 30.0%
+    against a 15% gate; scored against the batch-tail quantity actually
+    measured, the same model reads 4.4% and 4.7%. Callers with batch > 1 traces
+    should score against `queueing.concurrent_prefill_ttft_ms(
+    ttft_ms - prefill_overhead_ms, prefill_overhead_ms, batch)`.
+    """
     from .estimate import estimate
+    batched = {t.batch for t in traces if t.batch > 1}
+    if batched:
+        import warnings
+        warnings.warn(
+            f"_mape is scoring single-request TTFT against traces containing "
+            f"batch sizes {sorted(batched)}. Batched traces record the batch "
+            f"TAIL, so the reported TTFT error is inflated and not "
+            f"interpretable as model accuracy. See _mape.__doc__.",
+            RuntimeWarning, stacklevel=2)
     errs: list[float] = []
     for t in traces:
         hw = fleet[t.silicon]

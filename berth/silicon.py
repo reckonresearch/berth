@@ -56,6 +56,11 @@ FLEET: dict[str, SiliconProfile] = {
     p.name: p
     for p in [
         SiliconProfile("h100-sxm",  "gpu", peak_tflops=989,  hbm_bw_tbs=3.35, mem_gb=80,  base_price_hr=3.20, fp8_tflops=1979),
+        # H100 PCIe: lower clocks/power (310W) and HBM2e vs SXM's HBM3, so both
+        # peak compute and bandwidth are materially below the SXM part. Measured
+        # P0 microbench on this card: GEMM 388 TFLOPS bf16, d2d bandwidth
+        # 1591 GB/s. prefill_overhead_ms fitted from batch=1 traces = 54.6ms.
+        SiliconProfile("h100-pcie", "gpu", peak_tflops=756,  hbm_bw_tbs=2.00, mem_gb=80,  base_price_hr=2.39),
         SiliconProfile("h200-sxm",  "gpu", peak_tflops=989,  hbm_bw_tbs=4.80, mem_gb=141, base_price_hr=3.90, fp8_tflops=1979),
         # Blackwell flagship. Dense tensor specs [CONFIG: NVIDIA B200 datasheet]:
         # BF16 2250 / FP8 4500 / FP4 9000 TFLOPS; 180GB HBM3e @ 8 TB/s; ~$4.99/hr
@@ -67,7 +72,7 @@ FLEET: dict[str, SiliconProfile] = {
                        mfu=0.35, bw_eff=0.65, fp8_tflops=2615),  # CDNA3 fp8 ~2x bf16. mfu gap = software-maturity premium source
         SiliconProfile("a100-80g",  "gpu", peak_tflops=312,  hbm_bw_tbs=2.00, mem_gb=80,  base_price_hr=1.40),  # Ampere: no native fp8 -> fp8_tflops None
         SiliconProfile("l40s",      "gpu", peak_tflops=362,  hbm_bw_tbs=0.864, mem_gb=48, base_price_hr=0.95,
-                       prefill_overhead_ms=100.0, fp8_tflops=724),  # measured P0 2026-07-07; Ada fp8 ~2x
+                       prefill_overhead_ms=0.0, fp8_tflops=724),  # floor fit per run from batch=1 traces; Ada fp8 ~2x
         SiliconProfile("cpu-spr",   "cpu", peak_tflops=8,    hbm_bw_tbs=0.30, mem_gb=512, base_price_hr=0.60,
                        mfu=0.30, bw_eff=0.60),
         # TPU: systolic-array (non-SIMT) accelerator. The cross-architecture
