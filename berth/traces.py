@@ -17,6 +17,9 @@ from .silicon import SiliconProfile
 from .workload import MODELS, ModelSpec, WorkloadSpec, profile
 
 
+SOURCES = ("measured", "mock")
+
+
 @dataclass(frozen=True)
 class TraceRecord:
     silicon: str
@@ -27,6 +30,17 @@ class TraceRecord:
     measured_ttft_ms: float
     measured_tpot_ms: float
     t: float = 0.0                  # normalized observation time in [0, 1]
+    source: str = "measured"        # "measured" | "mock". Schema 2.
+
+    def __post_init__(self):
+        # A mock trace and a hardware trace are otherwise indistinguishable on
+        # disk, and the contribution path is a pull request. One unlabelled
+        # simulated file would silently corrupt the corpus, which is the single
+        # error this project cannot recover from. So the field is mandatory in
+        # substance even though it has a default, and an unknown value is fatal
+        # rather than coerced.
+        if self.source not in SOURCES:
+            raise ValueError(f"source must be one of {SOURCES}, got {self.source!r}")
 
     def signature(self, models: dict[str, ModelSpec] = MODELS):
         return profile(WorkloadSpec(
@@ -90,5 +104,6 @@ def generate_traces(true_fleet: dict[str, SiliconProfile],
                 measured_ttft_ms=e.ttft_ms * noise(),
                 measured_tpot_ms=e.tpot_ms * noise(),
                 t=t,
+                source="mock",   # generated from a hidden fleet, not observed
             ))
     return traces

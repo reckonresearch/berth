@@ -199,6 +199,7 @@ def run_sweep(args) -> list[TraceRecord]:
                         avg_output_tokens=output,
                         measured_ttft_ms=ttft_ms, measured_tpot_ms=tpot_ms,
                         t=total / 1000.0,
+                        source="mock" if args.mock else "measured",
                     ))
                     total += 1
                     print(f"[{total}] b={batch} p={prompt} o={output} "
@@ -206,7 +207,8 @@ def run_sweep(args) -> list[TraceRecord]:
     return traces
 
 
-SCHEMA_VERSION = 1  # bump on any TraceRecord field change; loaders must check
+SCHEMA_VERSION = 2  # bump on any TraceRecord field change; loaders must check
+SUPPORTED_SCHEMAS = (1, 2)
 
 
 def save_jsonl(traces: list[TraceRecord], path: str) -> None:
@@ -226,10 +228,29 @@ def load_jsonl(path: str) -> list[TraceRecord]:
                 continue
             d = json.loads(line)
             v = d.pop("schema", 1)
-            if v != SCHEMA_VERSION:
+            if v not in SUPPORTED_SCHEMAS:
                 raise ValueError(f"trace schema v{v} unsupported (loader is v{SCHEMA_VERSION})")
+            if v < 2:
+                # Schema 1 predates the source field. Every v1 file in this repo
+                # is hardware, so default to measured rather than rejecting real
+                # data. Contributions are held to a stricter rule: see
+                # bench.check_contributed, which requires the field explicitly,
+                # because a v1 file from outside has genuinely unknown origin.
+                d.setdefault("source", "measured")
             out.append(TraceRecord(**d))
     return out
+
+
+def provenance_of(traces: list[TraceRecord]) -> str:
+    """Sole provenance of a trace set. A file is measurement or it is
+    rehearsal, never both: a mixed set has no defensible label, and the
+    inheritance rule would force the whole thing down to mock anyway."""
+    kinds = {t.source for t in traces}
+    if len(kinds) > 1:
+        raise SystemExit(
+            f"refusing a trace set mixing {sorted(kinds)}. Split them; a mixed "
+            "set has no provenance, so no number derived from it has one either.")
+    return kinds.pop() if kinds else "measured"
 
 
 def main():

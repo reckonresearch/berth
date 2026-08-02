@@ -24,7 +24,7 @@ import statistics
 import sys
 from collections import defaultdict
 
-from bench.run_sweep import load_jsonl
+from bench.sounding import load_jsonl, provenance_of
 from berth.calibrate import calibrate
 from berth.estimate import estimate, replica_layout
 from berth.silicon import FLEET
@@ -227,6 +227,12 @@ def main():
     args = p.parse_args()
 
     traces = [t for f in args.files for t in load_jsonl(f)]
+    kind = provenance_of(traces)
+    if kind == "mock":
+        print("WARNING: mock traces. Nothing below is a hardware measurement.\n"
+              "         Calibrating on mock output recovers the model that\n"
+              "         generated it. Do not publish and do not contribute.\n")
+    print(f"provenance: {kind}  ({len(traces)} traces)")
     print(f"loaded {len(traces)} traces\n")
 
     # Apply the fitted prefill floor, if supplied, to the silicon under test.

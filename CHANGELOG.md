@@ -1,3 +1,20 @@
+## v0.5.0
+
+- feat(traces): `TraceRecord.source` ("measured" | "mock"), schema 2. A mock
+  trace and a hardware trace were previously indistinguishable on disk while
+  the contribution path was an open pull request, so the corpus could be
+  corrupted by accident. Schema-1 files load as "measured" (this repo's own
+  P0 traces are real); contributions must state it explicitly.
+- feat(sounding): stamp source on every record; `provenance_of()` refuses a
+  trace set mixing measured and mock.
+- feat(validate): report provenance in the header, warn loudly on mock.
+- feat(fit_overhead): `python -m bench.fit_overhead` fits the fixed prefill
+  floor from batch-1 cells. The floor belongs to one (accelerator, driver,
+  server, config) tuple and is not spec-predictable, so profiles ship 0.0 and
+  each run fits its own. Refuses flat sweeps and flags negative fits.
+- feat(check_contributed): CI gate rejecting mock or unlabelled contributions.
+- test: 16 new tests covering provenance, back-compatibility and the fitter.
+
 # Changelog
 
 ## 0.1.0 (berth)
