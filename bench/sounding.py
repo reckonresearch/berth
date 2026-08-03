@@ -263,6 +263,59 @@ def provenance_of(traces: list[TraceRecord]) -> str:
     return kinds.pop() if kinds else "measured"
 
 
+def verify_served_model(base_url: str, model_id: str) -> str:
+    """Confirm the endpoint is serving the model we are about to attribute to.
+
+    WHY this is not optional. `--model` is a berth registry key (parameter
+    count, layers, attention family) and `--model-id` is whatever the server
+    loaded. Nothing else connects them. Point the harness at a server running
+    Qwen while passing `--model llama3-8b` and every request succeeds, every
+    timing is real, and all 90 cells are attributed to the wrong parameter
+    count. The roofline then inverts against the wrong weights and the fitted
+    mfu/bw_eff silently absorb the discrepancy.
+
+    That failure is invisible: no exception, no warning, plausible numbers.
+    It is the last path in this harness by which a measurement can be wrong
+    without anyone noticing, which is exactly the class of error the corpus
+    cannot survive.
+
+    Returns the served model id on success. Raises SystemExit on mismatch.
+    """
+    u = urlparse(base_url)
+    conn = None
+    try:
+        # Construction inside the try: a refused connection raises here, not at
+        # request time, and a raw traceback is not a useful thing to hand
+        # someone who is paying for a GPU by the minute.
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=30)
+        conn.request("GET", "/v1/models")
+        resp = conn.getresponse()
+        if resp.status != 200:
+            raise SystemExit(
+                f"GET /v1/models returned {resp.status}. Cannot confirm what the "
+                f"endpoint is serving, so refusing to attribute measurements to "
+                f"--model-id {model_id!r}. Check --base-url points at a running "
+                f"OpenAI-compatible server.")
+        served = [m.get("id") for m in json.loads(resp.read()).get("data", [])]
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(
+            f"could not reach {base_url}/v1/models: {exc}. The server must be up "
+            f"before the sweep starts; a sweep against a dead endpoint wastes the "
+            f"rental and produces nothing.") from exc
+    finally:
+        if conn is not None:
+            conn.close()
+
+    if model_id not in served:
+        raise SystemExit(
+            f"--model-id {model_id!r} is not served by {base_url}.\n"
+            f"  serving: {served or '(nothing)'}\n"
+            f"Every request would still succeed and every timing would be real, "
+            f"but the cells would be attributed to weights the server never ran. "
+            f"Pass one of the ids above, or start the server on {model_id!r}.")
+    return model_id
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--silicon", required=True, choices=sorted(FLEET))
@@ -280,6 +333,10 @@ def main():
     args = p.parse_args()
     if not args.mock and not (args.base_url and args.model_id):
         p.error("real mode requires --base-url and --model-id (or pass --mock)")
+    if not args.mock:
+        # Fail here, before renting time is spent, rather than after 90 cells.
+        served = verify_served_model(args.base_url, args.model_id)
+        print(f"endpoint serving {served}, attributing to --model {args.model}")
     args.grid = DEFAULT_GRID
     traces = run_sweep(args)
     save_jsonl(traces, args.out)

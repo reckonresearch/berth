@@ -6,12 +6,19 @@ rather than by care.
 """
 
 import json
+from unittest import mock
 
 import pytest
 
 from bench.check_contributed import check_file
 from bench.fit_overhead import fit_floor
-from bench.sounding import SCHEMA_VERSION, load_jsonl, provenance_of, save_jsonl
+from bench.sounding import (
+    SCHEMA_VERSION,
+    load_jsonl,
+    provenance_of,
+    save_jsonl,
+    verify_served_model,
+)
 from berth.traces import TraceRecord
 
 
@@ -153,3 +160,49 @@ def test_fit_refuses_too_few_lengths():
 def test_fit_flags_a_negative_floor():
     traces = synth_floor_traces(-30.0, 0.05, [512, 2048, 8192])
     assert fit_floor(traces)["h100-pcie"]["negative"] is True
+
+
+# -- the served-model guard -------------------------------------------------
+
+def _fake_endpoint(served_ids, status=200):
+    """Stand in for /v1/models without opening a socket."""
+
+    class Resp:
+        def __init__(self):
+            self.status = status
+        def read(self):
+            return json.dumps({"data": [{"id": i} for i in served_ids]}).encode()
+
+    conn = mock.MagicMock()
+    conn.getresponse.return_value = Resp()
+    return mock.patch("http.client.HTTPConnection", return_value=conn)
+
+
+def test_guard_accepts_a_matching_model():
+    with _fake_endpoint(["meta-llama/Meta-Llama-3-8B"]):
+        assert verify_served_model("http://x:8000",
+                                   "meta-llama/Meta-Llama-3-8B") == "meta-llama/Meta-Llama-3-8B"
+
+
+def test_guard_refuses_a_different_model():
+    """The silent-corruption case: the sweep would succeed and every cell would
+    be attributed to weights the server never ran."""
+    with _fake_endpoint(["Qwen/Qwen2.5-7B-Instruct"]):
+        with pytest.raises(SystemExit) as e:
+            verify_served_model("http://x:8000", "meta-llama/Meta-Llama-3-8B")
+        assert "Qwen" in str(e.value)
+
+
+def test_guard_refuses_when_the_endpoint_is_unreachable():
+    from unittest import mock
+
+    from bench.sounding import verify_served_model
+    with mock.patch("http.client.HTTPConnection", side_effect=OSError("refused")):
+        with pytest.raises(SystemExit):
+            verify_served_model("http://x:8000", "any/model")
+
+
+def test_guard_refuses_on_non_200():
+    with _fake_endpoint([], status=404):
+        with pytest.raises(SystemExit):
+            verify_served_model("http://x:8000", "any/model")
