@@ -62,16 +62,59 @@ def _auth_headers(api_key: str | None) -> dict:
     return h
 
 
+# Vocabulary for prompt construction. Short common tokens, so the character
+# count stays close to the token count on any BPE tokenizer.
+_WORDS = ("time", "part", "hand", "eye", "place", "work", "case", "point",
+          "fact", "group", "way", "form", "side", "line", "state", "kind",
+          "head", "house", "week", "field", "term", "book", "word", "level")
+
+
+def make_prompt(prompt_tokens: int, rng: random.Random) -> str:
+    """A prompt of roughly `prompt_tokens` tokens, unique to this request.
+
+    WHY uniqueness is load-bearing, and why the obvious implementation is
+    wrong. The natural thing is `"x " * prompt_tokens`, and it was what this
+    harness did. Every request in a batch, every repetition and every cell of
+    the same length then sends byte-identical text.
+
+    vLLM and SGLang both enable automatic prefix caching by default in current
+    releases. With identical prompts, the first request prefills and every
+    subsequent one is served from cache. The consequences are not subtle and
+    they are not obvious from the output:
+
+      * TTFT stops measuring prefill. On an A100 running Qwen3-30B-A3B this
+        produced apparent prefill throughput of 18.8x the card's peak FLOPS,
+        and TTFT that grew 1.3x for 15x the tokens.
+      * Above batch 1 the requests share KV blocks, so the prefix is read once
+        per step rather than once per request, and the KV term appears to be
+        overcounted by up to 1.8x.
+      * Nothing errors. The numbers look plausible and the run completes.
+
+    Every request therefore gets a distinct random prefix. The tail is filler
+    so the length is still controlled.
+    """
+    if prompt_tokens <= 0:
+        return ""
+    # Enough entropy that two prompts colliding is not a thing that happens,
+    # and long enough to exceed any cache block size (vLLM blocks are 16
+    # tokens, so a 32-token unique head cannot be shared even partially).
+    head = " ".join(rng.choice(_WORDS) for _ in range(min(32, prompt_tokens)))
+    remaining = prompt_tokens - min(32, prompt_tokens)
+    if remaining <= 0:
+        return head
+    return head + " " + " ".join(rng.choice(_WORDS) for _ in range(remaining))
+
+
 def _stream_one(base_url: str, model_id: str, prompt_tokens: int, max_tokens: int,
-                api_key: str | None = None):
+                api_key: str | None = None, rng: random.Random | None = None):
     """One streaming completion; returns (ttft_s, tpot_s median). Fails loud."""
     u = urlparse(base_url)
     conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=600)
     body = json.dumps({
         "model": model_id,
-        # 'x ' pairs tokenize ~1 token each on Llama tokenizers; close enough
-        # for load shaping — real prompt length is whatever the server reports.
-        "prompt": "x " * prompt_tokens,
+        # Unique per request: see make_prompt. Real prompt length is whatever
+        # the server reports back, not what we asked for.
+        "prompt": make_prompt(prompt_tokens, rng or random.Random()),
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "stream": True,
@@ -151,13 +194,36 @@ def _stream_one(base_url: str, model_id: str, prompt_tokens: int, max_tokens: in
     return ttft, tpot, prompt_tokens
 
 
-def measure_cell(base_url, model_id, batch, prompt, output, api_key=None):
-    """Fire `batch` concurrent streams; return (ttft_ms, tpot_ms, prompt_toks)."""
+def measure_cell(base_url, model_id, batch, prompt, output, api_key=None, rng=None,
+                 report_concurrency=False):
+    """Fire `batch` concurrent streams; return (ttft_ms, tpot_ms, prompt_toks).
+
+    Each stream builds its own prompt from a separate seeded Random, so the
+    batch shares no prefix. Seeds derive from the caller's rng, so the sweep
+    stays reproducible.
+    """
+    rng = rng or random.Random()
+    seeds = [rng.getrandbits(64) for _ in range(batch)]
     with ThreadPoolExecutor(max_workers=batch) as ex:
         results = list(ex.map(
-            lambda _: _stream_one(base_url, model_id, prompt, output, api_key),
-            range(batch),
+            lambda sd: _stream_one(base_url, model_id, prompt, output, api_key,
+                                   random.Random(sd)),
+            seeds,
         ))
+    if report_concurrency:
+        # Requests admitted together finish their first token together. A wide
+        # spread means the server ran them in waves, so the nominal batch is
+        # not the batch the GPU saw, and every per-batch term is being fitted
+        # against a number that does not describe the hardware.
+        _t = sorted(r[0] for r in results)
+        if len(_t) > 1 and _t[0] > 0:
+            spread = _t[-1] / _t[0]
+            if spread > 2.0:
+                print(f"  NOTE b={batch}: first-token times span {spread:.1f}x "
+                      f"({_t[0]*1000:.0f}ms to {_t[-1]*1000:.0f}ms). The server "
+                      f"admitted these in waves, so effective concurrency is "
+                      f"below {batch}. Check --max-num-seqs and "
+                      f"--max-num-batched-tokens on the server.")
     ttfts = [r[0] for r in results]
     tpots = [r[1] for r in results]
     reported = [r[2] for r in results if r[2] is not None]
@@ -206,7 +272,8 @@ def run_sweep(args) -> list[TraceRecord]:
                         # Warm-up rep is measured but discarded (cold caches).
                         ttft_ms, tpot_ms, prompt_actual = measure_cell(
                             args.base_url, args.model_id, batch, prompt, output,
-                            getattr(args, "api_key", None))
+                            getattr(args, "api_key", None), rng,
+                            report_concurrency=(batch > 1))
                         prompt = prompt_actual   # record truth, not the request
                         # Discard the first chronological execution of each
                         # cell (cold caches, CUDA-graph capture). The shuffled
@@ -385,6 +452,55 @@ def resolve_silicon_provenance(declared: str, base_url: str) -> str:
     return "captured"
 
 
+def probe_prefix_caching(base_url, model_id, api_key=None, tokens=512):
+    """Detect automatic prefix caching empirically, by sending a prompt twice.
+
+    No OpenAI-compatible endpoint reports its scheduler configuration, so this
+    cannot be asked. It can be measured: send an identical prompt twice and
+    compare first-token latency. A large drop means the second request was
+    served from cache.
+
+    This matters even after prompts are made unique, because it tells the
+    reader what kind of server produced the numbers. A deployment with prefix
+    caching on serves real traffic differently from one without, and a cell
+    measured on one does not transfer to the other. It is a property of the
+    configuration, not of the silicon, and it belongs in the record.
+
+    Returns (enabled: bool | None, first_ms, second_ms). None means the probe
+    could not run and the question is unanswered rather than answered no.
+    """
+    rng = random.Random(0xC0FFEE)
+    prompt = make_prompt(tokens, rng)
+    try:
+        u = urlparse(base_url)
+        times = []
+        for _ in range(2):
+            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=120)
+            body = json.dumps({"model": model_id, "prompt": prompt, "max_tokens": 2,
+                               "temperature": 0.0, "stream": True, "ignore_eos": True})
+            t0 = time.perf_counter()
+            conn.request("POST", "/v1/completions", body, _auth_headers(api_key))
+            r = conn.getresponse()
+            if r.status != 200:
+                conn.close()
+                return None, 0.0, 0.0
+            # First byte carrying a text delta is close enough for a ratio.
+            while True:
+                blk = r.read(256)
+                if not blk or b'"text"' in blk:
+                    break
+            times.append((time.perf_counter() - t0) * 1000)
+            conn.close()
+    except (OSError, json.JSONDecodeError):
+        return None, 0.0, 0.0
+
+    first, second = times
+    # A cache hit removes the prefill entirely, which is most of TTFT at this
+    # length. Anything under 60% of the first request is a hit; jitter alone
+    # does not halve a latency.
+    return (second < 0.6 * first), first, second
+
+
 def verify_served_model(base_url: str, model_id: str,
                         api_key: str | None = None) -> str:
     """Confirm the endpoint is serving the model we are about to attribute to.
@@ -443,6 +559,51 @@ def verify_served_model(base_url: str, model_id: str,
     return model_id
 
 
+def write_run_meta(path: str, args, traces) -> str:
+    """Write the run's conditions beside the traces.
+
+    A trace line says what was measured. This says under what conditions, and
+    the conditions are what decide whether a cell transfers. Serving stack,
+    prefix caching, quantisation, how the silicon identity was established:
+    none of these are visible in a timing, and all of them change what the
+    timing means.
+
+    Kept out of the trace schema on purpose. These are per-run facts, and
+    duplicating them across ninety lines invites them to disagree.
+    """
+    meta = {
+        "berth_schema": SCHEMA_VERSION,
+        "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "silicon": args.silicon,
+        "silicon_provenance": getattr(args, "silicon_provenance", "self_reported"),
+        "model": args.model,
+        "model_id": args.model_id,
+        "base_url": args.base_url,
+        "mock": bool(args.mock),
+        "prefix_caching": getattr(args, "prefix_caching", None),
+        "weight_bytes": getattr(args, "weight_bytes", 2.0),
+        "kv_bytes": getattr(args, "kv_bytes", 2.0),
+        "grid": args.grid,
+        "seed": args.seed,
+        "n_traces": len(traces),
+        "unknown": [
+            # Stated rather than guessed. Each of these changes what the
+            # numbers mean and none is reportable over an OpenAI-compatible
+            # API, so a reader has to be told they were not captured.
+            "chunked_prefill",
+            "max_num_seqs",
+            "max_num_batched_tokens",
+            "tensor_parallel_size",
+            "kv_cache_dtype",
+            "serving_stack_version",
+        ],
+    }
+    out = path + ".meta.json"
+    with open(out, "w") as f:
+        json.dump(meta, f, indent=2)
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--silicon", required=True, choices=sorted(FLEET))
@@ -474,12 +635,30 @@ def main():
         # detect that, so the only defence is saying so out loud.
         args.silicon_provenance = resolve_silicon_provenance(
             args.silicon, args.base_url)
+
+        cached, t1, t2 = probe_prefix_caching(args.base_url, args.model_id,
+                                              args.api_key)
+        args.prefix_caching = cached
+        if cached is True:
+            print(f"prefix caching: ON ({t1:.0f}ms cold, {t2:.0f}ms warm). "
+                  f"Prompts in this sweep are unique so the sweep itself is "
+                  f"unaffected, but this is a property of the deployment and "
+                  f"is recorded with the run: a cell measured with caching on "
+                  f"does not transfer to a deployment without it.")
+        elif cached is False:
+            print(f"prefix caching: off ({t1:.0f}ms, {t2:.0f}ms)")
+        else:
+            print("prefix caching: could not probe, recorded as unknown")
     else:
         args.silicon_provenance = "mock"
     args.grid = DEFAULT_GRID
     traces = run_sweep(args)
     save_jsonl(traces, args.out)
+    meta_path = write_run_meta(args.out, args, traces)
     print(f"wrote {len(traces)} traces -> {args.out}")
+    print(f"wrote run conditions -> {meta_path}")
+    print("Send both. A trace without its conditions is a number without a "
+          "denominator.")
 
 
 if __name__ == "__main__":
