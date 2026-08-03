@@ -26,7 +26,7 @@ import sys
 
 def check_file(path):
     """Return a list of complaints, each as (line_number, message)."""
-    problems = []
+    problems, notes = [], []
     with open(path) as f:
         for i, line in enumerate(f, 1):
             if not line.strip():
@@ -51,7 +51,19 @@ def check_file(path):
                 problems.append((i, f"unknown source {source!r}"))
             if schema is not None and schema < 2:
                 problems.append((i, f"schema v{schema}; contributions require v2"))
-    return problems
+            prov = d.get("silicon_provenance")
+            if prov == "mock":
+                problems.append((i, "silicon_provenance is 'mock'"))
+            elif prov == "self_reported":
+                # Not a rejection. The corpus accepts self-reported cells,
+                # because a remote endpoint genuinely cannot be inspected. But
+                # the index should be able to tell the two apart, and a
+                # reviewer should see it before merging rather than after.
+                notes.append((i, "silicon_provenance is 'self_reported': the "
+                                 "hardware identity was asserted, not captured. "
+                                 "Accepted, but worth confirming with the "
+                                 "contributor that the box matches the label."))
+    return problems, notes
 
 
 def main(argv=None):
@@ -79,7 +91,9 @@ def main(argv=None):
 
     rejected = 0
     for f in files:
-        problems = check_file(f)
+        problems, notes = check_file(f)
+        for line_no, msg in notes:
+            print(f"note     {f} line {line_no}: {msg}")
         if problems:
             rejected += 1
             print(f"REJECTED {f}")

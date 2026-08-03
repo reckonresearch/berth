@@ -225,6 +225,9 @@ def run_sweep(args) -> list[TraceRecord]:
                         w_bytes=getattr(args, "weight_bytes", 2.0),
                         kv_bytes=getattr(args, "kv_bytes", 2.0),
                         source="mock" if args.mock else "measured",
+                        silicon_provenance=getattr(
+                            args, "silicon_provenance",
+                            "mock" if args.mock else "self_reported"),
                     ))
                     total += 1
                     print(f"[{total}] b={batch} p={prompt} o={output} "
@@ -232,12 +235,20 @@ def run_sweep(args) -> list[TraceRecord]:
     return traces
 
 
-# v1: original. v2: TWO different v2s were minted in parallel branches, one
-# adding w_bytes/kv_bytes and one adding source. Neither is a superset of the
-# other, so v2 on disk is ambiguous and the loader below back-fills whichever
-# half is absent. v3 is the reconciled schema carrying both.
-SCHEMA_VERSION = 3
-SUPPORTED_SCHEMAS = (1, 2, 3)
+# v1: original.
+# v2: TWO different v2s were minted in parallel branches, one adding
+#     w_bytes/kv_bytes and one adding source. Neither is a superset of the
+#     other, so v2 on disk is ambiguous and the loader back-fills whichever
+#     half is absent.
+# v3: same collision again. One v3 reconciled the two v2s; another added
+#     silicon_provenance. Both exist on disk and neither is a superset.
+# v4: carries every field. The loader back-fills anything below it.
+#
+# The recurrence is the lesson: a schema number minted on a branch is a
+# promise about a shared namespace, and two branches cannot both keep it.
+# Bump on merge, not on the branch.
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMAS = (1, 2, 3, 4)
 
 
 def save_jsonl(traces: list[TraceRecord], path: str) -> None:
@@ -259,17 +270,23 @@ def load_jsonl(path: str) -> list[TraceRecord]:
             v = d.pop("schema", 1)
             if v not in SUPPORTED_SCHEMAS:
                 raise ValueError(f"trace schema v{v} unsupported (loader is v{SCHEMA_VERSION})")
-            if v < 3:
-                # v1 predates both additions. v2 carries exactly one of them,
-                # and which one depends on the branch that wrote it, so default
-                # whatever is missing rather than guessing at the writer.
-                # bf16 and measured are the right defaults: every pre-v3 file in
-                # this repo is hardware at bf16. Contributions are held to a
-                # stricter rule (bench.check_contributed requires the field
+            if v < SCHEMA_VERSION:
+                # Every version below the current one is missing at least one
+                # field, and which one depends on the branch that wrote it, so
+                # default whatever is absent rather than guessing at the writer.
+                # bf16, measured and self_reported are the right defaults:
+                # every pre-v4 file in this repo is hardware at bf16 whose
+                # silicon was labelled by hand. Contributions are held to a
+                # stricter rule (bench.check_contributed requires the fields
                 # explicitly), because an outside file has unknown origin.
                 d.setdefault("w_bytes", 2.0)
                 d.setdefault("kv_bytes", 2.0)
                 d.setdefault("source", "measured")
+                # Pre-v3 files predate silicon capture. They were labelled by
+                # hand, which is exactly what self_reported means, so this is
+                # a description rather than a downgrade.
+                d.setdefault("silicon_provenance",
+                             "mock" if d.get("source") == "mock" else "self_reported")
             out.append(TraceRecord(**d))
     return out
 
@@ -284,6 +301,88 @@ def provenance_of(traces: list[TraceRecord]) -> str:
             f"refusing a trace set mixing {sorted(kinds)}. Split them; a mixed "
             "set has no provenance, so no number derived from it has one either.")
     return kinds.pop() if kinds else "measured"
+
+
+# GPU names as nvidia-smi reports them, mapped to fleet keys. Substring match,
+# lowercased, first hit wins, so "NVIDIA H100 PCIe" and "H100 PCIe" both land.
+# Deliberately incomplete: an unrecognised card yields self_reported rather
+# than a guess, because a wrong mapping is worse than an absent one.
+_SMI_TO_FLEET = {
+    "h100 pcie": "h100-pcie",
+    "h100 nvl": "h100-pcie",
+    "h100": "h100-sxm",
+    "h200": "h200-sxm",
+    "l40s": "l40s",
+    "a100": "a100-80g",
+    "b200": "b200",
+    "mi300x": "mi300x",
+}
+
+
+def detect_silicon(timeout: int = 10):
+    """Ask the local box what it is. Returns (fleet_key, raw_name) or None.
+
+    Only meaningful when the server runs on this machine. nvidia-smi is the
+    only thing here that knows the truth: an OpenAI-compatible endpoint does
+    not report its hardware, so for a remote server this is unanswerable and
+    the record stays self_reported.
+    """
+    import shutil
+    import subprocess
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=timeout, check=True).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
+    raw = out.strip().splitlines()[0].strip() if out.strip() else ""
+    if not raw:
+        return None
+    low = raw.lower()
+    for needle, key in _SMI_TO_FLEET.items():
+        if needle in low:
+            return key, raw
+    return None, raw
+
+
+def resolve_silicon_provenance(declared: str, base_url: str) -> str:
+    """Decide whether the silicon label is captured or merely asserted.
+
+    Refuses outright on a detected mismatch. That is the case the whole field
+    exists for: every timing in the sweep would be real, and every one would be
+    filed against hardware that never produced it.
+    """
+    host = urlparse(base_url).hostname or ""
+    if host not in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        print(f"NOTE: server is remote ({host}), so the hardware cannot be "
+              f"inspected from here. Recording silicon as self_reported. "
+              f"Traces marked self_reported are accepted, but a cell whose "
+              f"identity nobody verified is worth less than one whose identity "
+              f"was captured.")
+        return "self_reported"
+
+    found = detect_silicon()
+    if found is None:
+        print("NOTE: nvidia-smi unavailable, recording silicon as self_reported.")
+        return "self_reported"
+    key, raw = found
+    if key is None:
+        print(f"NOTE: nvidia-smi reports {raw!r}, which is not in the fleet "
+              f"registry, so it cannot be checked against --silicon "
+              f"{declared!r}. Recording as self_reported.")
+        return "self_reported"
+    if key != declared:
+        raise SystemExit(
+            f"--silicon says {declared!r} but nvidia-smi reports {raw!r} "
+            f"({key!r}).\n"
+            f"Every timing in this sweep would be real and every one would be "
+            f"filed against hardware that never produced it, which no later "
+            f"check can detect. Pass --silicon {key}, or run on the box you "
+            f"meant to measure.")
+    print(f"nvidia-smi confirms {raw}, silicon provenance: captured")
+    return "captured"
 
 
 def verify_served_model(base_url: str, model_id: str,
@@ -373,11 +472,10 @@ def main():
         # operator, and a wrong one produces ninety cells of real timings
         # attributed to hardware that never ran them. Nothing downstream can
         # detect that, so the only defence is saying so out loud.
-        print(f"WARNING: --silicon {args.silicon} is declared, not detected. "
-              f"Nothing here verifies this box is an {args.silicon}. If it is "
-              f"not, every cell will be attributed to the wrong hardware and "
-              f"no later check will catch it. Confirm with nvidia-smi before "
-              f"the sweep starts.")
+        args.silicon_provenance = resolve_silicon_provenance(
+            args.silicon, args.base_url)
+    else:
+        args.silicon_provenance = "mock"
     args.grid = DEFAULT_GRID
     traces = run_sweep(args)
     save_jsonl(traces, args.out)

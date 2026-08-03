@@ -17,6 +17,7 @@ from .silicon import SiliconProfile
 from .workload import MODELS, ModelSpec, WorkloadSpec, profile
 
 SOURCES = ("measured", "mock")
+SILICON_PROVENANCE = ("captured", "self_reported", "mock")
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,16 @@ class TraceRecord:
     w_bytes: float = 2.0
     kv_bytes: float = 2.0
     source: str = "measured"        # "measured" | "mock". Schema 2.
+    # How the silicon identity in this record was established. Schema 3.
+    #   captured      nvidia-smi on the box agreed with --silicon
+    #   self_reported the operator asserted it and nothing verified it
+    #   mock          no hardware involved
+    # The corpus guarantee is that every cell was observed on the hardware it
+    # names. `source` proves hardware was involved at all; this proves the
+    # hardware was the hardware claimed. Without it a trace from an RTX 6000
+    # labelled h100-pcie passes every check, because nothing in it is a lie
+    # except the label, and the label is the part the corpus indexes on.
+    silicon_provenance: str = "self_reported"
 
     def __post_init__(self):
         # A mock trace and a hardware trace are otherwise indistinguishable on
@@ -46,6 +57,9 @@ class TraceRecord:
         # rather than coerced.
         if self.source not in SOURCES:
             raise ValueError(f"source must be one of {SOURCES}, got {self.source!r}")
+        if self.silicon_provenance not in SILICON_PROVENANCE:
+            raise ValueError(f"silicon_provenance must be one of "
+                             f"{SILICON_PROVENANCE}, got {self.silicon_provenance!r}")
 
     def signature(self, models: dict[str, ModelSpec] = MODELS):
         model = models[self.model_name]

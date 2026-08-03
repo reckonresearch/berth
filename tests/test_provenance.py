@@ -107,19 +107,19 @@ BODY = dict(silicon="l40s", model_name="llama3-8b", batch=1,
 
 def test_contribution_gate_accepts_measured(tmp_path):
     f = write(tmp_path, "good.jsonl", [{"schema": 2, "source": "measured", **BODY}])
-    assert check_file(f) == []
+    assert check_file(f)[0] == []
 
 
 def test_contribution_gate_rejects_mock(tmp_path):
     f = write(tmp_path, "mock.jsonl", [{"schema": 2, "source": "mock", **BODY}])
-    assert any("mock" in m for _, m in check_file(f))
+    assert any("mock" in m for _, m in check_file(f)[0])
 
 
 def test_contribution_gate_rejects_unlabelled(tmp_path):
     """Stricter than the loader on purpose: we know our own v1 files are
     hardware, we do not know a stranger's."""
     f = write(tmp_path, "old.jsonl", [{"schema": 1, **BODY}])
-    problems = check_file(f)
+    problems, _ = check_file(f)
     assert any("source" in m for _, m in problems)
     assert any("v2" in m for _, m in problems)
 
@@ -228,3 +228,59 @@ def test_model_probe_refuses_on_401_with_a_key_hint():
         with pytest.raises(SystemExit) as e:
             verify_served_model("http://x:8000", "any/model")
         assert "api-key" in str(e.value).lower()
+
+
+# -- silicon provenance -----------------------------------------------------
+
+def test_silicon_provenance_defaults_to_self_reported():
+    assert rec().silicon_provenance == "self_reported"
+
+
+def test_unknown_silicon_provenance_is_fatal():
+    with pytest.raises(ValueError):
+        rec(silicon_provenance="probably_an_h100")
+
+
+def test_schema_2_file_loads_as_self_reported(tmp_path):
+    """Pre-v3 traces were labelled by hand. self_reported describes that
+    accurately; it is not a downgrade."""
+    p = tmp_path / "v2.jsonl"
+    p.write_text(json.dumps({
+        "schema": 2, "source": "measured", "silicon": "l40s",
+        "model_name": "llama3-8b", "batch": 1, "avg_prompt_tokens": 512,
+        "avg_output_tokens": 128, "measured_ttft_ms": 120.0,
+        "measured_tpot_ms": 22.0}) + "\n")
+    assert load_jsonl(str(p))[0].silicon_provenance == "self_reported"
+
+
+def test_mismatch_between_declared_and_detected_silicon_refuses():
+    """The case the field exists for: real timings, wrong hardware label."""
+    from bench.sounding import resolve_silicon_provenance
+    with mock.patch("bench.sounding.detect_silicon",
+                    return_value=("l40s", "NVIDIA L40S")):
+        with pytest.raises(SystemExit) as e:
+            resolve_silicon_provenance("h100-pcie", "http://localhost:8000")
+        assert "l40s" in str(e.value)
+
+
+def test_agreement_yields_captured():
+    from bench.sounding import resolve_silicon_provenance
+    with mock.patch("bench.sounding.detect_silicon",
+                    return_value=("l40s", "NVIDIA L40S")):
+        assert resolve_silicon_provenance("l40s", "http://localhost:8000") == "captured"
+
+
+def test_remote_server_cannot_be_captured():
+    """A remote endpoint does not report its hardware, so the honest answer is
+    self_reported rather than a guess."""
+    from bench.sounding import resolve_silicon_provenance
+    assert resolve_silicon_provenance("l40s", "http://10.0.0.5:8000") == "self_reported"
+
+
+def test_unrecognised_card_is_not_guessed():
+    """An RTX PRO 6000 is not in the registry. Recording self_reported is
+    correct; mapping it to the nearest fleet key would be a fabrication."""
+    from bench.sounding import resolve_silicon_provenance
+    with mock.patch("bench.sounding.detect_silicon",
+                    return_value=(None, "NVIDIA RTX PRO 6000 Blackwell WS")):
+        assert resolve_silicon_provenance("h100-pcie", "http://localhost:8000") == "self_reported"
