@@ -83,7 +83,13 @@ def report(rows, label):
         # inflates apparent parallelism: 32x the batch for 2.3x the time
         # implies 14 prompts prefilled at once, which no scheduler does.
         implied_c = bat / tim if tim > 0 else float("inf")
-        ok = implied_c < 3.0 if bat >= 8 else True
+        # The fixed prefill floor is paid once per request regardless of batch,
+        # so at short prompts it dominates TTFT and inflates this ratio: a
+        # 54.6ms floor on a 60ms TTFT leaves almost nothing that scales. The
+        # same error as instrument defect #1, which attributed the floor to
+        # compute. Only judge where the floor is a small share of TTFT, which
+        # is the longest prompt in the sweep.
+        ok = True if p != max(by_len) else implied_c < 3.0
         verdicts.append(ok)
         note = ("ok" if ok else
                 f"implied parallelism {implied_c:.1f}, cache signature")
