@@ -18,11 +18,18 @@ from berth.workload import MODELS, WorkloadSpec, profile
 MEASURED = {"l40s", "h100-pcie"}
 
 
+# Column layout is shared between the header and the rows so they stay aligned,
+# and so the output is addressable by field number in awk. Units live in the
+# header rather than repeated on every row: a reader learns them once, and a
+# script does not have to strip "ms" off every value.
+_HEADER = (f"{'silicon':<12} {'$/Mtok':>9}  {'TTFT_ms':>9}  {'TPOT_ms':>9}  "
+           f"{'tok/s':>9}  provenance")
+
+
 def _fmt_estimate(key, e, price_hr):
     tag = "MEASURED" if key in MEASURED else "prior"
-    return (f"{key:<12} {e.cost_per_mtok:8.3f} $/Mtok   "
-            f"TTFT {e.ttft_ms:6.1f}ms   TPOT {e.tpot_ms:6.2f}ms   "
-            f"{e.tokens_per_s:7.1f} tok/s   [{tag}]")
+    return (f"{key:<12} {e.cost_per_mtok:9.3f}  {e.ttft_ms:9.1f}  "
+            f"{e.tpot_ms:9.2f}  {e.tokens_per_s:9.1f}  {tag}")
 
 
 def cmd_estimate(args):
@@ -50,8 +57,11 @@ def cmd_estimate(args):
         } for k, e in rows], indent=2))
         return
     print(f"# {args.model}  batch={args.batch}  prompt={args.prompt}  output={args.output}")
+    print(_HEADER)
     for k, e in sorted(rows, key=lambda r: r[1].cost_per_mtok):
         print(_fmt_estimate(k, e, price[k]))
+    print("# provenance: MEASURED = validated against hardware traces; "
+          "prior = spec sheet, unverified")
 
 
 def cmd_premium(args):

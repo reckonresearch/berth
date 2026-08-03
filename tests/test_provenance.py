@@ -206,3 +206,25 @@ def test_guard_refuses_on_non_200():
     with _fake_endpoint([], status=404):
         with pytest.raises(SystemExit):
             verify_served_model("http://x:8000", "any/model")
+
+
+# -- authentication ---------------------------------------------------------
+
+def test_auth_headers_omit_the_token_when_absent():
+    from bench.sounding import _auth_headers
+    assert _auth_headers(None) == {"Content-Type": "application/json"}
+
+
+def test_auth_headers_carry_a_bearer_token():
+    from bench.sounding import _auth_headers
+    h = _auth_headers("sk-abc")
+    assert h["Authorization"] == "Bearer sk-abc"
+
+
+def test_model_probe_refuses_on_401_with_a_key_hint():
+    """A 401 must name the fix. The tester's response to an auth failure was
+    to redeploy vLLM without auth, which measures a different server."""
+    with _fake_endpoint([], status=401):
+        with pytest.raises(SystemExit) as e:
+            verify_served_model("http://x:8000", "any/model")
+        assert "api-key" in str(e.value).lower()

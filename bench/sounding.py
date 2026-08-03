@@ -27,6 +27,7 @@ import argparse
 import http.client
 import json
 import math
+import os
 import random
 import statistics
 import time
@@ -47,7 +48,22 @@ DEFAULT_GRID = {
 
 # ---------------------------------------------------------------- real path
 
-def _stream_one(base_url: str, model_id: str, prompt_tokens: int, max_tokens: int):
+def _auth_headers(api_key: str | None) -> dict:
+    """Headers for a request. Bearer token when the endpoint requires one.
+
+    vLLM and SGLang both take --api-key, and any endpoint reachable from
+    outside a host almost certainly uses it. Without this the harness gets a
+    401 and the only way forward is to redeploy the server without auth,
+    which nobody running production traffic is going to do.
+    """
+    h = {"Content-Type": "application/json"}
+    if api_key:
+        h["Authorization"] = f"Bearer {api_key}"
+    return h
+
+
+def _stream_one(base_url: str, model_id: str, prompt_tokens: int, max_tokens: int,
+                api_key: str | None = None):
     """One streaming completion; returns (ttft_s, tpot_s median). Fails loud."""
     u = urlparse(base_url)
     conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=600)
@@ -63,9 +79,15 @@ def _stream_one(base_url: str, model_id: str, prompt_tokens: int, max_tokens: in
         "ignore_eos": True,          # vLLM: force exactly max_tokens of decode
     })
     t0 = time.perf_counter()
-    conn.request("POST", "/v1/completions", body,
-                 {"Content-Type": "application/json"})
+    conn.request("POST", "/v1/completions", body, _auth_headers(api_key))
     resp = conn.getresponse()
+    if resp.status in (401, 403):
+        raise SystemExit(
+            f"server returned {resp.status}. The endpoint requires authentication "
+            f"and no key was given. Pass --api-key, or set BERTH_API_KEY in the "
+            f"environment. Do not redeploy the server without auth to work around "
+            f"this: measuring a differently-configured server measures a different "
+            f"thing.")
     if resp.status != 200:
         raise RuntimeError(f"server returned {resp.status}: {resp.read()[:200]!r}")
     # SSE framing note: http.client yields arbitrary byte *blocks*, not lines,
@@ -129,11 +151,11 @@ def _stream_one(base_url: str, model_id: str, prompt_tokens: int, max_tokens: in
     return ttft, tpot, prompt_tokens
 
 
-def measure_cell(base_url, model_id, batch, prompt, output):
+def measure_cell(base_url, model_id, batch, prompt, output, api_key=None):
     """Fire `batch` concurrent streams; return (ttft_ms, tpot_ms, prompt_toks)."""
     with ThreadPoolExecutor(max_workers=batch) as ex:
         results = list(ex.map(
-            lambda _: _stream_one(base_url, model_id, prompt, output),
+            lambda _: _stream_one(base_url, model_id, prompt, output, api_key),
             range(batch),
         ))
     ttfts = [r[0] for r in results]
@@ -183,7 +205,8 @@ def run_sweep(args) -> list[TraceRecord]:
                     else:
                         # Warm-up rep is measured but discarded (cold caches).
                         ttft_ms, tpot_ms, prompt_actual = measure_cell(
-                            args.base_url, args.model_id, batch, prompt, output)
+                            args.base_url, args.model_id, batch, prompt, output,
+                            getattr(args, "api_key", None))
                         prompt = prompt_actual   # record truth, not the request
                         # Discard the first chronological execution of each
                         # cell (cold caches, CUDA-graph capture). The shuffled
@@ -263,7 +286,8 @@ def provenance_of(traces: list[TraceRecord]) -> str:
     return kinds.pop() if kinds else "measured"
 
 
-def verify_served_model(base_url: str, model_id: str) -> str:
+def verify_served_model(base_url: str, model_id: str,
+                        api_key: str | None = None) -> str:
     """Confirm the endpoint is serving the model we are about to attribute to.
 
     WHY this is not optional. `--model` is a berth registry key (parameter
@@ -288,8 +312,12 @@ def verify_served_model(base_url: str, model_id: str) -> str:
         # request time, and a raw traceback is not a useful thing to hand
         # someone who is paying for a GPU by the minute.
         conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=30)
-        conn.request("GET", "/v1/models")
+        conn.request("GET", "/v1/models", headers=_auth_headers(api_key))
         resp = conn.getresponse()
+        if resp.status in (401, 403):
+            raise SystemExit(
+                f"GET /v1/models returned {resp.status}. The endpoint requires "
+                f"authentication; pass --api-key or set BERTH_API_KEY.")
         if resp.status != 200:
             raise SystemExit(
                 f"GET /v1/models returned {resp.status}. Cannot confirm what the "
@@ -330,13 +358,26 @@ def main():
     # silently compared to bf16 in the premium table.
     p.add_argument("--weight-bytes", type=float, default=2.0)
     p.add_argument("--kv-bytes", type=float, default=2.0)
+    p.add_argument("--api-key", default=os.environ.get("BERTH_API_KEY"),
+                   help="bearer token if the endpoint requires one "
+                        "(default: $BERTH_API_KEY)")
     args = p.parse_args()
     if not args.mock and not (args.base_url and args.model_id):
         p.error("real mode requires --base-url and --model-id (or pass --mock)")
     if not args.mock:
         # Fail here, before renting time is spent, rather than after 90 cells.
-        served = verify_served_model(args.base_url, args.model_id)
+        served = verify_served_model(args.base_url, args.model_id, args.api_key)
         print(f"endpoint serving {served}, attributing to --model {args.model}")
+        # --silicon cannot be verified over an OpenAI-compatible API: the
+        # endpoint does not report what it runs on. It is an assertion by the
+        # operator, and a wrong one produces ninety cells of real timings
+        # attributed to hardware that never ran them. Nothing downstream can
+        # detect that, so the only defence is saying so out loud.
+        print(f"WARNING: --silicon {args.silicon} is declared, not detected. "
+              f"Nothing here verifies this box is an {args.silicon}. If it is "
+              f"not, every cell will be attributed to the wrong hardware and "
+              f"no later check will catch it. Confirm with nvidia-smi before "
+              f"the sweep starts.")
     args.grid = DEFAULT_GRID
     traces = run_sweep(args)
     save_jsonl(traces, args.out)
