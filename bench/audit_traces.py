@@ -106,7 +106,8 @@ def check_ttft_scales_with_tokens(traces):
     return problems
 
 
-def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token):
+def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token,
+                             ceiling=1.0):
     """Effective bandwidth is a device property. It cannot drift with context.
 
     Drift with context at batch > 1, while batch 1 stays flat, is the
@@ -140,11 +141,16 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
                     f"context ({min(effs):.2f} to {max(effs):.2f}). Effective "
                     f"bandwidth is a device constant; drift means the KV term "
                     f"is being fitted against bytes that were not moved.")
-        if effs and max(effs) > 1.0:
+        if effs and max(effs) > ceiling:
             problems.append(
-                f"batch {b}: implied bw_eff reaches {max(effs):.2f}, above 1.0. "
-                f"The card cannot exceed its own bandwidth; the byte count is "
-                f"too high or the timing is too short.")
+                f"batch {b}: implied bw_eff reaches {max(effs):.2f}, above "
+                f"{ceiling:.2f}. The card cannot exceed its own bandwidth; the "
+                f"byte count is too high or the timing is too short. If "
+                f"--bw-tbs was a microbenchmarked d2d copy rather than the "
+                f"datasheet peak, this is a unit error rather than a finding: "
+                f"a copy benchmark understates achievable read bandwidth, and "
+                f"passing it here produced a false CONTAMINATED verdict on a "
+                f"clean L40S file.")
     return problems, rows
 
 
@@ -206,7 +212,11 @@ def main(argv=None):
     p.add_argument("--peak-tflops", type=float, required=True,
                    help="dense bf16 peak of the card, e.g. 312 for A100-80G")
     p.add_argument("--bw-tbs", type=float, required=True,
-                   help="memory bandwidth in TB/s, e.g. 2.0 for A100-80G")
+                   help="DATASHEET peak memory bandwidth in TB/s, e.g. 2.039 "
+                        "for A100-80G, 0.864 for L40S. Not the microbenchmark.")
+    p.add_argument("--bw-is-microbench", action="store_true",
+                   help="acknowledge that --bw-tbs is a microbenchmarked "
+                        "figure and scale the bw_eff ceiling accordingly")
     p.add_argument("--active-params-b", type=float, required=True,
                    help="active parameters in billions (= total, if dense)")
     p.add_argument("--kv-bytes-per-token", type=float, required=True,
@@ -237,8 +247,13 @@ def main(argv=None):
     print(f"  TTFT scales with tokens   {'FAIL' if probs else 'ok'}")
     all_problems += probs
 
+    # A microbenched d2d copy understates achievable read bandwidth, so
+    # bw_eff computed against it legitimately exceeds 1. Raise the bar rather
+    # than reporting physics as contamination.
+    ceiling = 1.35 if args.bw_is_microbench else 1.0
     probs, rows = check_bw_eff_is_constant(
-        traces, args.bw_tbs, args.active_params_b, args.kv_bytes_per_token)
+        traces, args.bw_tbs, args.active_params_b, args.kv_bytes_per_token,
+        ceiling)
     print(f"  bw_eff constant           {'FAIL' if probs else 'ok'}")
     for b, (effs, spread) in sorted(rows.items()):
         print(f"      b={b:<3} " + " ".join(f"{e:.2f}" for e in effs)

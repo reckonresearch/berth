@@ -48,7 +48,28 @@ curl -sf "${BASE_URL}/v1/models" > "$OUT/server_models.json" \
   echo "date_utc: $STAMP"; echo "silicon: $SILICON"; echo "model: $MODEL"
   echo "model_id: $MODEL_ID"; echo "base_url: $BASE_URL"
   echo "quant: w_bytes=${WEIGHT_BYTES:-2.0} kv_bytes=${KV_BYTES:-2.0}"
-  echo "--- vllm ---"; pip show vllm 2>/dev/null | head -2 || echo "vllm: not local"
+  echo "--- serving stack ---"
+  # Which server actually answered, and its version. `pip show vllm` alone is
+  # not enough: vLLM is often installed alongside SGLang, so a version line
+  # appears for a server that never ran. The SGLang cell shipped with vLLM
+  # 0.5.5 in its metadata and no SGLang version anywhere, on the one run whose
+  # entire purpose was comparing serving stacks.
+  STACK=$(curl -sf "$BASE_URL/v1/models" 2>/dev/null \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0].get("owned_by","unknown"))' \
+          2>/dev/null || echo unknown)
+  echo "served_by: $STACK"
+  for pkg in vllm sglang; do
+    v=$(pip show "$pkg" 2>/dev/null | awk '/^Version:/{print $2}')
+    [ -n "$v" ] && echo "$pkg: $v" || echo "$pkg: not installed"
+  done
+  echo "--- server config (affects what the numbers mean) ---"
+  # These change the measurement and none are reportable over an
+  # OpenAI-compatible API. Recorded from the launch command if it is still in
+  # the process table, otherwise named as uncaptured rather than assumed.
+  ps aux | grep -oE '\-\-(max-num-seqs|max-num-batched-tokens|max-model-len|enable-chunked-prefill|tensor-parallel-size|enable-prefix-caching)(=| )[^ ]*' \
+    | sort -u || true
+  echo "(absent lines above mean the flag was not on the command line, so the"
+  echo " server default applied; the default is version-specific)"
   echo "--- gpu ---"
   nvidia-smi --query-gpu=name,driver_version,clocks.sm,clocks.mem,power.limit \
     --format=csv 2>/dev/null || rocm-smi 2>/dev/null || echo "no gpu query tool"
