@@ -16,7 +16,6 @@ Exit 0 clean, 1 contaminated, 2 unusable input.
 """
 
 import argparse
-import json
 import statistics as st
 import sys
 from collections import defaultdict
