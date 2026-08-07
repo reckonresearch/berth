@@ -185,6 +185,12 @@ def main(argv=None):
     p.add_argument("--kv-bytes-per-token", type=float, required=True)
     p.add_argument("--gate", type=float, default=15.0,
                    help="pre-registered error gate, percent")
+    p.add_argument("--respect-envelope", action="store_true",
+                   help="also report error over only those cells the model "
+                        "declares itself applicable to, i.e. kv_pressure below "
+                        "KV_PRESSURE_WARN. Both figures are printed; the "
+                        "unscoped one is the headline.")
+    p.add_argument("--model", help="model key, required with --respect-envelope")
     p.add_argument("--bw", action="append", default=[], metavar="SILICON=TBS",
                    help="datasheet peak bandwidth per silicon, repeatable, "
                         "e.g. --bw l40s=0.864 --bw h100-pcie=2.0")
@@ -205,6 +211,41 @@ def main(argv=None):
                  f"result here inflates every bw_eff above 1.")
 
     print(f"{len(traces)} traces, {len({r.silicon for r in traces})} accelerators")
+
+    outside = []
+    if args.respect_envelope:
+        # The envelope is a property of the model, declared before the data is
+        # seen: a cell whose KV cache would not fit one card is one the
+        # estimator says it does not apply to. Excluding those is scoring the
+        # claim that was made. Excluding the worst residuals would not be, and
+        # the difference is that this rule is computable without looking at
+        # any measurement.
+        from berth.estimate import KV_PRESSURE_WARN, estimate
+        from berth.silicon import FLEET
+        from berth.workload import MODELS, WorkloadSpec, profile
+        if not args.model or args.model not in MODELS:
+            sys.exit("--respect-envelope needs --model naming a registry entry")
+        keep = []
+        for r in traces:
+            hw = FLEET.get(r.silicon)
+            if hw is None:
+                keep.append(r)
+                continue
+            sig = profile(WorkloadSpec(model=MODELS[args.model],
+                                       avg_prompt_tokens=r.avg_prompt_tokens,
+                                       avg_output_tokens=r.avg_output_tokens,
+                                       target_batch=r.batch))
+            e = estimate(sig, hw, hw.base_price_hr)
+            (outside if e.kv_pressure > KV_PRESSURE_WARN else keep).append(r)
+        if outside:
+            cells = sorted({(r.silicon, r.batch, r.avg_prompt_tokens) for r in outside})
+            print(f"\nOutside the declared envelope, {len(outside)} traces "
+                  f"across {len(cells)} cells:")
+            for c in cells:
+                print(f"    {c[0]}  batch {c[1]}  prompt {c[2]}  "
+                      f"KV does not fit one card")
+            print("  These are reported separately below. The model flags them "
+                  "before any measurement is taken.")
     floor = theil_sen_floor(traces)
     if floor is not None:
         print(f"prefill floor across all traces: {floor:.0f} ms "
@@ -218,6 +259,22 @@ def main(argv=None):
                         args.kv_bytes_per_token, bw_by_silicon, args.gate)
         if res:
             worst = max(worst, max(r[1] for r in res))
+
+    if outside:
+        inside = [r for r in traces if r not in outside]
+        print("\n" + "=" * 66)
+        print("Within the declared envelope only")
+        print("=" * 66)
+        scoped = 0.0
+        for sp in splits:
+            res = run_split(inside, sp, args.active_params_b,
+                            args.kv_bytes_per_token, bw_by_silicon, args.gate)
+            if res:
+                scoped = max(scoped, max(r[1] for r in res))
+        print(f"\nScoped worst fold {scoped:.1f}%, unscoped {worst:.1f}%. "
+              f"Publish both. The unscoped figure is the headline, because a "
+              f"reader deciding whether to trust this has not yet agreed to "
+              f"the envelope.")
 
     print()
     if worst <= args.gate:
