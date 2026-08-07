@@ -117,24 +117,53 @@ def run_split(traces, split, active_params_b, kv_bytes_per_token, bw_by_silicon,
         # a subset is the mistake this module exists to remove.
         errs = []
         for sil in {r.silicon for r in test}:
-            tr = [r for r in train if r.silicon == sil] or train
-            bw = bw_by_silicon.get(sil)
-            if bw is None:
+            bw_test = bw_by_silicon.get(sil)
+            if bw_test is None:
                 continue
-            eff = bw_eff_of(tr, active_params_b, kv_bytes_per_token, bw)
+            # bw_eff is dimensionless: a fraction of a card's own peak. It must
+            # therefore be fitted against the TRAINING card's bandwidth and
+            # then applied with the HELD-OUT card's bandwidth. Fitting on one
+            # card's timings against another card's peak is a unit error, and
+            # it produces efficiencies above 1.0, which is the tell.
+            same = [r for r in train if r.silicon == sil]
+            if same:
+                eff = bw_eff_of(same, active_params_b, kv_bytes_per_token, bw_test)
+            else:
+                # Leave-one-silicon-out: fit each training card against its
+                # own peak, then take the median across them. This is the
+                # transfer question, and it is the only split where the
+                # fitted constant crosses a device boundary.
+                effs = []
+                for tsil in {r.silicon for r in train}:
+                    bw_tr = bw_by_silicon.get(tsil)
+                    if bw_tr is None:
+                        continue
+                    e = bw_eff_of([r for r in train if r.silicon == tsil],
+                                  active_params_b, kv_bytes_per_token, bw_tr)
+                    if e is not None:
+                        effs.append(e)
+                eff = st.median(effs) if effs else None
             if eff is None:
                 continue
             for r in (x for x in test if x.silicon == sil):
                 pred = predict_tpot(r, eff, active_params_b,
-                                    kv_bytes_per_token, bw)
+                                    kv_bytes_per_token, bw_test)
                 errs.append(abs(pred - r.measured_tpot_ms) / r.measured_tpot_ms)
         if not errs:
             continue
         mape = 100 * st.mean(errs)
         sil0 = sorted({r.silicon for r in test})[0]
-        tr0 = [r for r in train if r.silicon == sil0] or train
-        eff0 = bw_eff_of(tr0, active_params_b, kv_bytes_per_token,
-                         bw_by_silicon.get(sil0, 1.0))
+        same0 = [r for r in train if r.silicon == sil0]
+        if same0:
+            eff0 = bw_eff_of(same0, active_params_b, kv_bytes_per_token,
+                             bw_by_silicon.get(sil0, 1.0))
+        else:
+            e0 = [bw_eff_of([r for r in train if r.silicon == t],
+                            active_params_b, kv_bytes_per_token,
+                            bw_by_silicon[t])
+                  for t in {r.silicon for r in train} if t in bw_by_silicon]
+            e0 = [e for e in e0 if e is not None]
+            eff0 = st.median(e0) if e0 else None
         results.append((held, mape))
         flag = "" if mape <= gate else "  OVER GATE"
         print(f"  {str(held):<22}{len(train):>9}{len(test):>8}"
