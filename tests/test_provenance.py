@@ -19,7 +19,10 @@ from bench.sounding import (
     save_jsonl,
     verify_served_model,
 )
+from berth.estimate import KV_PRESSURE_WARN, estimate
+from berth.silicon import FLEET
 from berth.traces import TraceRecord
+from berth.workload import MODELS, WorkloadSpec, profile
 
 
 def rec(**kw):
@@ -284,3 +287,37 @@ def test_unrecognised_card_is_not_guessed():
     with mock.patch("bench.sounding.detect_silicon",
                     return_value=(None, "NVIDIA RTX PRO 6000 Blackwell WS")):
         assert resolve_silicon_provenance("h100-pcie", "http://localhost:8000") == "self_reported"
+
+
+
+# -- KV pressure ------------------------------------------------------------
+
+def test_kv_pressure_flags_the_cell_that_thrashes():
+    """L40S, Llama-3-8B, batch 32 at 7680 tokens needs more KV than one card
+    has free. That is the cell carrying the batch-32 residual, and the
+    estimate should say so rather than quietly assume a second GPU."""
+    sig = profile(WorkloadSpec(model=MODELS["llama3-8b"], avg_prompt_tokens=7680,
+                               avg_output_tokens=128, target_batch=32))
+    e = estimate(sig, FLEET["l40s"], FLEET["l40s"].base_price_hr)
+    assert e.kv_pressure > KV_PRESSURE_WARN
+
+
+def test_kv_pressure_clear_on_a_larger_card():
+    """Same configuration on an H100 PCIe has headroom, which is why its
+    batch-32 residual is smaller."""
+    sig = profile(WorkloadSpec(model=MODELS["llama3-8b"], avg_prompt_tokens=7680,
+                               avg_output_tokens=128, target_batch=32))
+    e = estimate(sig, FLEET["h100-pcie"], FLEET["h100-pcie"].base_price_hr)
+    assert e.kv_pressure < KV_PRESSURE_WARN
+
+
+def test_kv_pressure_is_single_device():
+    """Reported per card, not per chosen layout. The layout math adds devices
+    until the cache fits, which hides the answer to 'can this run on one'."""
+    small = profile(WorkloadSpec(model=MODELS["llama3-8b"], avg_prompt_tokens=512,
+                                 avg_output_tokens=16, target_batch=1))
+    big = profile(WorkloadSpec(model=MODELS["llama3-8b"], avg_prompt_tokens=7680,
+                               avg_output_tokens=128, target_batch=32))
+    hw = FLEET["l40s"]
+    assert (estimate(big, hw, hw.base_price_hr).kv_pressure
+            > estimate(small, hw, hw.base_price_hr).kv_pressure * 10)
