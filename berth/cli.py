@@ -251,6 +251,31 @@ def cmd_pilot(args):
     return 0
 
 
+def cmd_versus(args):
+    """Should you self-host at all, and against which API.
+
+    The question most teams actually have, and the one nothing else can
+    answer: what a hosted endpoint charges is published, and what the same
+    work would cost on hardware they would rent is not.
+    """
+    import json as _json
+
+    from berth.versus import ApiOffer, compare, render
+    with open(args.offers) as f:
+        offers = [ApiOffer(**o) for o in _json.load(f)]
+    c = compare(model_key=args.model, prompt_tokens=args.prompt,
+                output_tokens=args.output, slo_bound_ms=args.slo_ms,
+                requests_per_hour=args.requests_per_hour,
+                api_offers=offers, concurrency=args.concurrency,
+                engineering_cost_per_hour=args.engineering_per_hour)
+    if args.json:
+        from dataclasses import asdict
+        print(_json.dumps(asdict(c), indent=2, default=str))
+    else:
+        print(render(c))
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="berth",
@@ -288,6 +313,24 @@ def build_parser():
     pl.add_argument("--output", type=int, default=128)
     pl.add_argument("--json", action="store_true")
     pl.set_defaults(func=cmd_place)
+
+    vs = sub.add_parser("versus",
+                        help="compare self-hosting against provider APIs")
+    vs.add_argument("--model", required=True)
+    vs.add_argument("--offers", required=True,
+                    help="JSON list of API rate cards")
+    vs.add_argument("--prompt", type=int, required=True)
+    vs.add_argument("--output", type=int, required=True)
+    vs.add_argument("--slo-ms", type=float, required=True)
+    vs.add_argument("--requests-per-hour", type=float, required=True,
+                    help="the load that decides it. A rented node is paid for "
+                         "idle and an API is not.")
+    vs.add_argument("--concurrency", type=int, default=8)
+    vs.add_argument("--engineering-per-hour", type=float, default=0.0,
+                    help="loaded cost of the time spent running it. At typical "
+                         "volumes this is the larger term.")
+    vs.add_argument("--json", action="store_true")
+    vs.set_defaults(func=cmd_versus)
 
     pi = sub.add_parser("pilot",
                         help="run one pass of the placement agent")

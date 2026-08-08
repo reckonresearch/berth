@@ -42,6 +42,7 @@ happens monthly or faster and it is visible on a release calendar.
 | **The declaration** | `.berth/classes.yaml` in the customer's own repository. What Pilot may watch, which paths it may write, what bound each class holds | built |
 | **The status page** | `.berth/STATUS.md`, rewritten on every pass. Every class, what it holds, what is recommended now, open proposals, settled periods, sources polled | built |
 | **Receipts** | the artifact. A conforming record settling one measurement period | built |
+| **versus** | self-host or API, on one axis. Cost per compliant token both sides, with the break-even volume | built |
 | **CUW-SLO** | the specification. How a conforming measurement is made and recorded | written |
 | **The Placement Holdout Protocol** | how a saving is proven. Declared baseline, held-out traffic, verified delta | written, never run |
 
@@ -178,6 +179,29 @@ renegotiating every baseline.
 ---
 
 ## 5. What is missing
+
+### The buyer set, and the lever on it
+
+The market slide counts 1,710 organisations self-hosting at material scale.
+That number is the constraint, and everything before `versus` assumed the
+decision to self-host was already made.
+
+`berth versus` answers the question most teams actually have. What a hosted
+endpoint charges is published; what the same work would cost on hardware they
+would rent is not, and computing it is the one thing this instrument can do
+that nothing else can. It puts both on one axis, excludes any offer whose
+latency misses the bound, and names the volume where the answer flips.
+
+The early runs make the shape clear. At 1,469 prompt tokens under an 800 ms
+bound, one MI300X saturates at roughly 40,700 requests an hour. Below about
+33,000 an hour a rented node is paid for while idle and the API wins at any
+price. Above it self-hosting wins, but only if engineering time is near zero:
+at twelve dollars an hour of loaded operator cost, self-hosting does not win at
+any volume.
+
+**That last figure is the finding.** For most teams the deciding term is not
+the GPU, it is the person watching it, and no price sheet on either side says
+so.
 
 ### Blocking, and not on us
 
