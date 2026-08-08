@@ -105,16 +105,52 @@ def check_ttft_scales_with_tokens(traces):
     return problems
 
 
+def kv_path_bandwidth(traces, kv_bytes_per_token):
+    """Effective bandwidth on the paged key-value path alone, per batch level.
+
+    Taken as a difference at fixed batch, where the weight term is identical
+    and cancels exactly. No fitting, no shared parameters, and no assumption
+    that one bandwidth describes both access patterns.
+
+    That assumption is why this exists. Weight reads are contiguous and paged
+    key-value reads are scattered across block tables, and a device can be
+    good at one and poor at the other. On an MI300X the two differ by a factor
+    of six above batch 8 while both NVIDIA cards measured hold flat, which is
+    a property of the kernel rather than a defect in the file.
+    """
+    by = defaultdict(lambda: defaultdict(list))
+    for t in traces:
+        by[t.batch][t.avg_prompt_tokens].append(t)
+    out = {}
+    for b, lens in sorted(by.items()):
+        ps = sorted(lens)
+        if len(ps) < 2:
+            continue
+        lo, hi = ps[0], ps[-1]
+        o = lens[lo][0].avg_output_tokens
+        dkv = b * ((hi + o // 2) - (lo + o // 2)) * kv_bytes_per_token
+        dt = (st.median(x.measured_tpot_ms for x in lens[hi])
+              - st.median(x.measured_tpot_ms for x in lens[lo])) / 1000.0
+        if dt > 0:
+            out[b] = dkv / dt / 1e9
+    return out
+
+
 def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token,
                              ceiling=1.0):
-    """Effective bandwidth is a device property. It cannot drift with context.
+    """Effective bandwidth on a single access pattern is a device property.
 
     Drift with context at batch > 1, while batch 1 stays flat, is the
-    shared-KV-block signature: identical prompts let the server read the
-    prefix once per step instead of once per request, so the KV term appears
-    overcounted and the drift grows with batch.
+    shared-key-value-block signature: identical prompts let the server read
+    the prefix once per step instead of once per request.
+
+    That signature is distinguishable from a real two-path device. Caching
+    contamination makes the key-value term look *cheaper* than it is, so the
+    apparent efficiency rises with context. A slow gather makes it look
+    dearer, so the apparent efficiency falls. The direction separates them,
+    and the caller checks it before reporting contamination.
     """
-    problems = []
+    problems, notes = [], []
     rows = {}
     by = defaultdict(lambda: defaultdict(list))
     for t in traces:
@@ -134,12 +170,23 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
             # One structurally odd cell should not condemn a file. Cache
             # contamination drifts monotonically and by a lot; a single
             # outlier is a finding to look at, not a reason to discard.
-            if spread > 1.35:
+            rising = effs[-1] > effs[0]
+            if spread > 1.35 and rising:
                 problems.append(
-                    f"batch {b}: implied bw_eff drifts {spread:.2f}x across "
-                    f"context ({min(effs):.2f} to {max(effs):.2f}). Effective "
-                    f"bandwidth is a device constant; drift means the KV term "
-                    f"is being fitted against bytes that were not moved.")
+                    f"batch {b}: implied bw_eff RISES {spread:.2f}x with "
+                    f"context ({effs[0]:.2f} to {effs[-1]:.2f}). Longer "
+                    f"context appearing cheaper per byte is the shared-cache "
+                    f"signature: the key-value term is being credited with "
+                    f"bytes that were not moved.")
+            elif spread > 1.35:
+                notes.append(
+                    f"batch {b}: implied bw_eff FALLS {spread:.2f}x with "
+                    f"context ({effs[0]:.2f} to {effs[-1]:.2f}). Longer "
+                    f"context costing more per byte is not contamination. It "
+                    f"means the paged key-value path is slower than the "
+                    f"contiguous weight path on this device, which is a "
+                    f"measurement rather than a defect. See the key-value "
+                    f"path table below.")
         if effs and max(effs) > ceiling:
             problems.append(
                 f"batch {b}: implied bw_eff reaches {max(effs):.2f}, above "
@@ -150,7 +197,7 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
                 f"a copy benchmark understates achievable read bandwidth, and "
                 f"passing it here produced a false CONTAMINATED verdict on a "
                 f"clean L40S file.")
-    return problems, rows
+    return problems, rows, notes
 
 
 def check_quant_label_plausible(traces, active_params_b, bw_tbs):
@@ -291,7 +338,7 @@ def main(argv=None):
     # bw_eff computed against it legitimately exceeds 1. Raise the bar rather
     # than reporting physics as contamination.
     ceiling = 1.35 if args.bw_is_microbench else 1.0
-    probs, rows = check_bw_eff_is_constant(
+    probs, rows, notes = check_bw_eff_is_constant(
         traces, args.bw_tbs, args.active_params_b, args.kv_bytes_per_token,
         ceiling)
     print(f"  bw_eff constant           {'FAIL' if probs else 'ok'}")
@@ -299,6 +346,25 @@ def main(argv=None):
         print(f"      b={b:<3} " + " ".join(f"{e:.2f}" for e in effs)
               + f"   spread {spread:.2f}x")
     all_problems += probs
+
+    # Reported whenever the grid supports it, not only when something fails.
+    # A device with two access patterns is the interesting case and it should
+    # not take a failure to surface it.
+    kv = kv_path_bandwidth(traces, args.kv_bytes_per_token)
+    if len(kv) >= 2:
+        vals = list(kv.values())
+        span = max(vals) / min(vals)
+        print(f"  key-value path            {min(vals):.0f} to {max(vals):.0f} "
+              f"GB/s across batch   {'flat' if span < 1.6 else f'{span:.1f}x spread'}")
+        for b, r in sorted(kv.items()):
+            print(f"      b={b:<3} {r:>8.0f} GB/s")
+        if span >= 1.6:
+            print("      The paged key-value path is not one constant on this "
+                  "device. Weight reads are contiguous and key-value reads are "
+                  "scattered, and this card is materially worse at the second "
+                  "above some batch size. That is a finding, not a defect.")
+    for _b, msg in [(0, m) for m in notes]:
+        print(f"  note     {msg}")
 
     probs, ratio = check_quant_label_plausible(
         traces, args.active_params_b, args.bw_tbs)

@@ -321,3 +321,67 @@ def test_kv_pressure_is_single_device():
     hw = FLEET["l40s"]
     assert (estimate(big, hw, hw.base_price_hr).kv_pressure
             > estimate(small, hw, hw.base_price_hr).kv_pressure * 10)
+
+
+# -- key-value path, and telling a finding from contamination ---------------
+
+def _synth(path, kv_gbs_by_batch, kv_bpt=131072, w_gb=16.06, w_gbs=1400.0):
+    """Write a trace file with a chosen key-value path rate, in GB/s, per batch.
+
+    Weight bytes move at a fixed rate and key-value bytes at the given one, so
+    a test can construct a device with two access patterns and check that the
+    audit separates them.
+    """
+    rows = []
+    for b, kv_gbs in kv_gbs_by_batch.items():
+        for p in (512, 2048, 7680):
+            ctx = p + 64
+            t = (w_gb / w_gbs + (b * ctx * kv_bpt / 1e9) / kv_gbs) * 1000
+            for _ in range(2):
+                rows.append({"schema": 3, "source": "measured",
+                             "silicon_provenance": "captured",
+                             "silicon": "mi300x", "model_name": "llama3-8b",
+                             "batch": b, "avg_prompt_tokens": p,
+                             "avg_output_tokens": 128,
+                             "measured_ttft_ms": 50.0 + p * 0.02 * b,
+                             "measured_tpot_ms": t})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+def test_slow_gather_is_a_finding_not_contamination(tmp_path):
+    """A key-value path that degrades with batch makes long context look
+    dearer per byte. That is a property of the device, and calling it a
+    corrupted file would have discarded the first cross-vendor result."""
+    from bench.audit_traces import check_bw_eff_is_constant
+    from bench.sounding import load_jsonl
+    p = tmp_path / "slow_gather.jsonl"
+    _synth(p, {1: 3400, 4: 3850, 8: 1950, 16: 633, 32: 658})
+    problems, _rows, notes = check_bw_eff_is_constant(
+        load_jsonl(str(p)), 5.3, 8.0, 131072)
+    assert not problems, problems
+    assert any("FALLS" in n for n in notes)
+
+
+def test_shared_cache_still_fails(tmp_path):
+    """Contamination makes long context look cheaper per byte. Opposite
+    direction, and it must still be reported."""
+    from bench.audit_traces import check_bw_eff_is_constant
+    from bench.sounding import load_jsonl
+    p = tmp_path / "cached.jsonl"
+    # key-value path improving with batch is not physical; it is the cache
+    _synth(p, {1: 700, 4: 1400, 8: 2400, 16: 4000, 32: 7000})
+    problems, _rows, _notes = check_bw_eff_is_constant(
+        load_jsonl(str(p)), 5.3, 8.0, 131072)
+    assert any("RISES" in x for x in problems), problems
+
+
+def test_kv_path_isolates_the_gather(tmp_path):
+    """The key-value rate is recovered from a difference at fixed batch, so
+    the weight term cancels and no fit is involved."""
+    from bench.audit_traces import kv_path_bandwidth
+    from bench.sounding import load_jsonl
+    p = tmp_path / "kv.jsonl"
+    _synth(p, {8: 2000, 32: 500})
+    kv = kv_path_bandwidth(load_jsonl(str(p)), 131072)
+    assert abs(kv[8] - 2000) / 2000 < 0.05
+    assert abs(kv[32] - 500) / 500 < 0.05
