@@ -109,6 +109,61 @@ def cmd_list(args):
         print(f"  {k}")
 
 
+def cmd_holdout(args):
+    """Check that the assignment distributes over a customer's identifiers.
+
+    Run before a period opens. A hash that does not spread evenly over their
+    identifier format is a defect in the instrument rather than a result, and
+    finding it here costs nothing while finding it in settlement voids a
+    month.
+    """
+    from berth.holdout import assign, realised_fraction, scale_floor
+
+    if args.ids:
+        with open(args.ids) as f:
+            ids = [ln.strip() for ln in f if ln.strip()]
+        if not ids:
+            raise SystemExit(f"{args.ids} contains no identifiers")
+    else:
+        import uuid
+        ids = [str(uuid.uuid4()) for _ in range(args.n)]
+        print(f"no --ids given, checking against {args.n:,} synthetic UUIDs. "
+              f"Use a sample of your real identifiers instead: sequential and "
+              f"tenant-prefixed formats behave differently.")
+
+    got = realised_fraction(ids, args.seed, args.fraction)
+    drift = abs(got - args.fraction)
+    print(f"\n  identifiers          {len(ids):,}")
+    print(f"  declared fraction    {args.fraction:.4f}")
+    print(f"  realised fraction    {got:.4f}")
+    print(f"  drift                {drift:.4f}")
+
+    if drift > 0.01:
+        print("\n  OUT OF TOLERANCE. The realised split is more than one "
+              "percentage point from the declared one, which means the hash "
+              "is not spreading evenly over this identifier format. Do not "
+              "open a period on it.")
+        return 1
+    print("\n  within tolerance.")
+
+    if args.spend:
+        s_star = scale_floor(args.share)
+        inst = ("assurance_light" if args.spend < 250_000
+                else "assurance" if args.spend < s_star else "savings_share")
+        print(f"\n  class spend          ${args.spend:,.0f}")
+        print(f"  scale floor          ${s_star:,.0f}")
+        print(f"  instrument           {inst}")
+        if inst != "savings_share":
+            print("  Below the floor the holdout costs more than the "
+                  "arrangement returns, so a flat fee is the right "
+                  "instrument and no holdout is needed.")
+
+    print("\n  sample assignments, reproducible from the seed:")
+    for r in ids[:5]:
+        print(f"    {r[:36]:<38}{assign(r, args.seed, args.fraction)}")
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="berth",
@@ -134,6 +189,20 @@ def build_parser():
     pr.add_argument("--prices", nargs="*", metavar="KEY=USD",
                     help="per-silicon price overrides, e.g. l40s=0.99 h100-pcie=3.35")
     pr.set_defaults(func=cmd_premium)
+
+    ho = sub.add_parser("holdout",
+                        help="check a holdout assignment before opening a period")
+    ho.add_argument("--seed", required=True,
+                    help="the seed from the declaration, committed in advance")
+    ho.add_argument("--fraction", type=float, default=0.05,
+                    help="declared holdout fraction")
+    ho.add_argument("--ids", help="file of real request identifiers, one per line")
+    ho.add_argument("--n", type=int, default=50_000,
+                    help="synthetic identifiers to use when --ids is absent")
+    ho.add_argument("--spend", type=float,
+                    help="annual class spend, to pick the instrument")
+    ho.add_argument("--share", type=float, default=0.20)
+    ho.set_defaults(func=cmd_holdout)
 
     ls = sub.add_parser("list", help="list known silicon and models with provenance")
     ls.set_defaults(func=cmd_list)
