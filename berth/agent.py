@@ -1,0 +1,289 @@
+"""The placement agent. Watches for change, re-estimates, opens a pull request.
+
+A placement is not a decision, it is a position that decays. A model version
+ships, a provider moves a price, a cell lands in the corpus, and the answer
+that was right last month is not right this month. Nobody checks, because
+checking requires re-measuring and nothing tells you when it is worth doing.
+
+This is the loop that tells you.
+
+    watch     model registries, price sources, corpus additions
+    detect    a change touching a declared workload class
+    estimate  re-run the placement decision against the new inputs
+    propose   a pull request against the customer's deployment config,
+              carrying the diff and the evidence
+
+**Why a pull request rather than an alert.** An alert creates work. A diff with
+evidence attached is work already done, arriving in a review workflow every
+infrastructure team already has, where it can be discussed, amended, rejected
+or merged. It also leaves the decision in the customer's own history rather
+than in a vendor dashboard, and it can be reverted by reverting the commit.
+
+**What it never does.** Merge. Deploy. Touch anything outside the declared
+configuration paths. It needs read access to a config repository and write
+access to a branch, and specifically not access to traffic, credentials, or
+the request path.
+
+**The rule that keeps it useful.** If the new answer is the same, or the margin
+sits inside the confidence band, it stops silently. An agent that opens a pull
+request every week is an agent that gets muted, and a muted agent is worse
+than none because it looks like coverage.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
+
+
+class Trigger(StrEnum):
+    """Why the agent woke up. Recorded on the proposal, because the reason a
+    placement changed is part of the decision."""
+
+    MODEL_VERSION = "model_version"      # a declared model shipped an update
+    PRICE_CHANGE = "price_change"        # a provider moved a rate
+    CORPUS_CELL = "corpus_cell"          # a measurement replaced a prior
+    SLO_CHANGE = "slo_change"            # the customer changed the bound
+    SCHEDULED = "scheduled"              # periodic re-check, no external event
+
+
+@dataclass(frozen=True)
+class WatchedClass:
+    """One workload class the agent is holding a position on."""
+
+    workload_class: str
+    model_id: str                        # what to watch in the registry
+    model_key: str                       # the berth registry key
+    current_silicon: str
+    current_model_version: str
+    slo_metric: str
+    slo_bound_ms: float
+    batch: int
+    prompt_tokens: int
+    output_tokens: int
+    config_path: str                     # file in the customer's repo
+    repo: str                            # owner/name
+
+
+@dataclass
+class Decision:
+    """The output of one re-estimation, before it becomes a proposal."""
+
+    recommended: str
+    incumbent: str
+    recommended_cost: float
+    incumbent_cost: float
+    confidence_band: float               # fractional, e.g. 0.106
+    measured_cells: int
+    prior_cells: int
+    feasible: bool
+    reason_infeasible: str | None = None
+
+    @property
+    def margin(self) -> float:
+        """Fractional improvement over the incumbent."""
+        if self.incumbent_cost <= 0:
+            return 0.0
+        return (self.incumbent_cost - self.recommended_cost) / self.incumbent_cost
+
+    @property
+    def clears_band(self) -> bool:
+        """Whether the improvement is larger than the uncertainty on it.
+
+        This is the gate that decides whether anything is proposed. A
+        recommendation inside the noise floor is not a recommendation, and
+        acting on one spends the customer's attention on a coin flip.
+        """
+        return self.margin > self.confidence_band
+
+    @property
+    def rests_on_measurement(self) -> bool:
+        """Whether the recommended placement has been measured at all.
+
+        A proposal resting entirely on spec-sheet arithmetic is stated as
+        such. A prior cell has been observed above 40 percent error in this
+        corpus, and a customer deciding whether to move production traffic
+        deserves to know which kind of number they are looking at.
+        """
+        return self.measured_cells > 0
+
+
+@dataclass
+class Proposal:
+    """A pull request, before it is opened."""
+
+    watched: WatchedClass
+    trigger: Trigger
+    decision: Decision
+    config_diff: str
+    title: str
+    body: str
+    created_utc: str = ""
+
+    def __post_init__(self):
+        if not self.created_utc:
+            self.created_utc = datetime.now(UTC).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+
+
+@dataclass
+class AgentRun:
+    """One pass of the loop, whether or not it proposed anything."""
+
+    triggers_seen: int = 0
+    estimates_run: int = 0
+    proposals: list[Proposal] = field(default_factory=list)
+    suppressed: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def proposal_rate(self) -> float:
+        """Share of triggers that became a proposal.
+
+        The kill criterion for this feature: if fewer than one trigger in four
+        produces a placement change clearing the confidence band, the trigger
+        set is wrong and the agent is noise. Retune it or drop it.
+        """
+        return len(self.proposals) / self.triggers_seen if self.triggers_seen else 0.0
+
+
+# ------------------------------------------------------------------- the loop
+
+def evaluate(watched: WatchedClass, trigger: Trigger, decision: Decision,
+             ) -> tuple[bool, str]:
+    """Whether this decision should become a pull request.
+
+    Returns (propose, reason). The reason is recorded either way, because a
+    suppressed trigger is evidence about the trigger set and the kill
+    criterion is computed from it.
+    """
+    if not decision.feasible:
+        # Worth proposing: an infeasible incumbent is a problem the customer
+        # has whether or not a better placement exists.
+        if decision.recommended == decision.incumbent:
+            return False, ("no feasible alternative and the incumbent is "
+                           "infeasible, which is a capacity problem rather "
+                           "than a placement one")
+        return True, "the incumbent cannot serve this workload"
+
+    if decision.recommended == decision.incumbent:
+        return False, "the answer did not change"
+
+    if not decision.clears_band:
+        return False, (f"improvement of {decision.margin:.1%} sits inside the "
+                       f"confidence band of {decision.confidence_band:.1%}, so "
+                       f"it is not distinguishable from noise")
+
+    return True, (f"{decision.margin:.1%} improvement against a "
+                  f"{decision.confidence_band:.1%} band")
+
+
+def build_proposal(watched: WatchedClass, trigger: Trigger, decision: Decision,
+                   *, config_diff: str, traces_url: str) -> Proposal:
+    """Compose the pull request.
+
+    The body carries the evidence rather than a summary of it: what changed,
+    what the estimate says, how much of it rests on measurement, and where the
+    traces are. A reviewer should be able to disagree with the recommendation
+    from the body alone.
+    """
+    d = decision
+    saving = f"{d.margin:.1%}"
+    basis = (f"{d.measured_cells} measured, {d.prior_cells} prior"
+             if d.measured_cells else
+             f"{d.prior_cells} prior, none measured")
+
+    title = (f"placement: move {watched.workload_class} from "
+             f"{d.incumbent} to {d.recommended}")
+
+    lines = [
+        f"Triggered by: **{trigger.value}**",
+        "",
+        f"`{watched.workload_class}` is running on **{d.incumbent}**. After "
+        f"the change above, the cheaper placement under the declared bound is "
+        f"**{d.recommended}**.",
+        "",
+        "| | incumbent | recommended |",
+        "| --- | --- | --- |",
+        f"| placement | {d.incumbent} | {d.recommended} |",
+        f"| cost per Mtok | ${d.incumbent_cost:.3f} | ${d.recommended_cost:.3f} |",
+        f"| improvement | | {saving} |",
+        f"| confidence band | | plus or minus {d.confidence_band:.1%} |",
+        "",
+        f"Bound held: {watched.slo_metric} under {watched.slo_bound_ms:.0f} ms "
+        f"at concurrency {watched.batch}, {watched.prompt_tokens} prompt "
+        f"tokens, {watched.output_tokens} output tokens.",
+        "",
+        f"**Basis:** {basis}.",
+    ]
+
+    if not d.rests_on_measurement:
+        lines += [
+            "",
+            "> This recommendation rests entirely on spec-sheet arithmetic. "
+            "No cell in the corpus covers this placement, and a prior has been "
+            "observed above 40 percent error. Treat it as a hypothesis worth "
+            "measuring rather than a change worth making, or ask us to "
+            "measure the cell first.",
+        ]
+
+    if not d.feasible:
+        lines += ["", f"> **The incumbent cannot serve this workload.** "
+                      f"{d.reason_infeasible}"]
+
+    lines += [
+        "",
+        f"Traces and method: {traces_url}",
+        "",
+        "Reverting this is reverting the commit. Nothing outside the "
+        "configuration paths in this diff was touched, and no traffic was "
+        "read to produce it.",
+    ]
+
+    return Proposal(watched=watched, trigger=trigger, decision=decision,
+                    config_diff=config_diff, title=title,
+                    body="\n".join(lines))
+
+
+def run(watched_classes, resolve_decision, detect_triggers,
+        *, traces_url="https://docs.reckonresearch.com/validation-p0/",
+        render_diff=None) -> AgentRun:
+    """One pass over every class the agent is holding.
+
+    `resolve_decision(watched, trigger) -> Decision` and
+    `detect_triggers(watched) -> list[Trigger]` are injected, so the loop can
+    be tested without a registry, a price feed, or a repository, and so a
+    customer can run it against their own sources.
+    """
+    result = AgentRun()
+    for w in watched_classes:
+        for trig in detect_triggers(w):
+            result.triggers_seen += 1
+            decision = resolve_decision(w, trig)
+            result.estimates_run += 1
+            propose, reason = evaluate(w, trig, decision)
+            if not propose:
+                result.suppressed.append((w.workload_class, reason))
+                continue
+            diff = (render_diff(w, decision) if render_diff
+                    else default_diff(w, decision))
+            result.proposals.append(
+                build_proposal(w, trig, decision, config_diff=diff,
+                               traces_url=traces_url))
+    return result
+
+
+def default_diff(watched: WatchedClass, decision: Decision) -> str:
+    """A unified diff over the declared configuration path.
+
+    Deliberately minimal: one field. An agent that rewrites a deployment file
+    is an agent nobody merges, and the smallest reviewable change is the one
+    most likely to be accepted.
+    """
+    return "\n".join([
+        f"--- a/{watched.config_path}",
+        f"+++ b/{watched.config_path}",
+        "@@",
+        f"-  accelerator: {decision.incumbent}",
+        f"+  accelerator: {decision.recommended}",
+    ])
