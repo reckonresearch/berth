@@ -164,6 +164,93 @@ def cmd_holdout(args):
     return 0
 
 
+def cmd_place(args):
+    """Emit a placement decision record.
+
+    Distinct from `estimate`, which answers what one workload costs on one
+    accelerator. A decision names what was recommended, what it beat, by how
+    much, and whether that margin survives the uncertainty on it. A contract
+    is written against a decision; an estimate that moves when the corpus
+    moves is correct behaviour, while a decision that moves silently is a
+    dispute.
+    """
+    import json as _json
+
+    from berth.place import decide, render
+    rec = decide(workload_class=args.workload_class, model_key=args.model,
+                 incumbent=args.incumbent, slo_bound_ms=args.slo_ms,
+                 batch=args.batch, prompt_tokens=args.prompt,
+                 output_tokens=args.output)
+    if args.json:
+        from dataclasses import asdict
+        print(_json.dumps(asdict(rec), indent=2))
+    else:
+        print(render(rec))
+    return 0 if rec.clears_band else 0
+
+
+def cmd_pilot(args):
+    """Run one pass of the placement agent against a config file of classes.
+
+    Shadow by default. The agent proposes changes to production
+    configuration, and the correct first posture is to read what it would
+    have said for a while before letting it say anything.
+    """
+    import json as _json
+
+    from berth.agent import AgentState, WatchedClass, run
+    from berth.place import decide
+    from berth.watch import WatchState, build_detector
+
+    with open(args.classes) as f:
+        raw = _json.load(f)
+    classes = [WatchedClass(**c) for c in raw]
+
+    wstate = WatchState()
+    if args.state:
+        try:
+            with open(args.state) as f:
+                saved = _json.load(f)
+            wstate.model_versions = saved.get("model_versions", {})
+            wstate.prices = saved.get("prices", {})
+        except FileNotFoundError:
+            print(f"no state at {args.state}, first run records rather than "
+                  f"fires. Nothing is proposed until a source is seen to move.")
+
+    detect = build_detector(wstate)
+    detect.poll([c.model_id for c in classes])
+
+    def resolve(w, _trig):
+        return decide(workload_class=w.workload_class, model_key=w.model_key,
+                      incumbent=w.current_silicon, slo_bound_ms=w.slo_bound_ms,
+                      batch=w.batch, prompt_tokens=w.prompt_tokens,
+                      output_tokens=w.output_tokens).to_decision()
+
+    astate = AgentState()
+    result = run(classes, resolve, detect, state=astate,
+                 shadow=not args.live)
+
+    mode = "LIVE" if args.live else "shadow"
+    print(f"{mode}: {result.triggers_seen} triggers, "
+          f"{len(result.proposals)} proposals, "
+          f"rate {result.proposal_rate:.0%}")
+    if result.triggers_seen and result.proposal_rate < 0.25:
+        print("  Below the 0.25 kill criterion. Sustained, that means the "
+              "trigger set is wrong and the agent is noise.")
+    for cls, why in result.suppressed:
+        print(f"  silent  {cls}: {why}")
+    for p in result.proposals:
+        print()
+        print(f"  {p.title}")
+        for line in p.config_diff.splitlines():
+            print(f"    {line}")
+    if args.state:
+        with open(args.state, "w") as f:
+            _json.dump({"model_versions": wstate.model_versions,
+                        "prices": wstate.prices}, f, indent=2)
+    return 0
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="berth",
@@ -189,6 +276,28 @@ def build_parser():
     pr.add_argument("--prices", nargs="*", metavar="KEY=USD",
                     help="per-silicon price overrides, e.g. l40s=0.99 h100-pcie=3.35")
     pr.set_defaults(func=cmd_premium)
+
+    pl = sub.add_parser("place", help="emit a placement decision record")
+    pl.add_argument("--workload-class", required=True)
+    pl.add_argument("--model", required=True)
+    pl.add_argument("--incumbent", required=True,
+                    help="the placement running today")
+    pl.add_argument("--slo-ms", type=float, default=1000.0)
+    pl.add_argument("--batch", type=int, default=8)
+    pl.add_argument("--prompt", type=int, default=512)
+    pl.add_argument("--output", type=int, default=128)
+    pl.add_argument("--json", action="store_true")
+    pl.set_defaults(func=cmd_place)
+
+    pi = sub.add_parser("pilot",
+                        help="run one pass of the placement agent")
+    pi.add_argument("--classes", required=True,
+                    help="JSON file of watched workload classes")
+    pi.add_argument("--state", help="file to persist watcher state between runs")
+    pi.add_argument("--live", action="store_true",
+                    help="open pull requests. Default is shadow: read what it "
+                         "would have said before letting it say anything.")
+    pi.set_defaults(func=cmd_pilot)
 
     ho = sub.add_parser("holdout",
                         help="check a holdout assignment before opening a period")

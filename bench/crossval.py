@@ -1,4 +1,10 @@
-"""Held-out validation. Four splits, in ascending order of what they prove.
+"""Cross-validation for the estimator. Four splits, ascending in what they prove.
+
+Named crossval rather than holdout because `berth.holdout` is a different
+thing entirely: the commercial protocol under which a share of traffic stays
+on a baseline placement so a saving can be measured. This module holds out
+cells from a fit. That one holds out requests from a routing change. Two
+unrelated ideas that both wanted the word.
 
 WHY this replaces the current holdout. Splitting repetitions puts the same
 cell on both sides of the line, so the model has already seen every
@@ -24,7 +30,7 @@ floor is fitted per card and per configuration. Any error computed on the same
 traces used to fit it is in-sample no matter which split is drawn. Fit the
 floor on the training side only, and say so.
 
-    python -m bench.holdout traces_l40s.jsonl traces_h100.jsonl \\
+    python -m bench.crossval traces_l40s.jsonl traces_h100.jsonl \\
         --split silicon --model llama3-8b
 
 Exit 0 if every held-out fold lands inside the gate, 1 otherwise.
@@ -176,7 +182,7 @@ def run_split(traces, split, active_params_b, kv_bytes_per_token, bw_by_silicon,
 
 def main(argv=None):
     p = argparse.ArgumentParser(
-        prog="python -m bench.holdout",
+        prog="python -m bench.crossval",
         description="Held-out validation across four splits.")
     p.add_argument("files", nargs="+")
     p.add_argument("--split", default="silicon",
