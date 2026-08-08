@@ -30,6 +30,25 @@ def _median_by(traces, keyfn, valfn):
     return {k: st.median(v) for k, v in d.items()}
 
 
+# Two tiers, because six of the ten instrument defects in this project were
+# checks that refused correct data. Every one encoded a convention as though
+# it were a law.
+#
+# IMPOSSIBLE is reserved for statements about hardware that cannot be false:
+# a card cannot exceed its own peak FLOPS, a duration cannot be negative, an
+# endpoint cannot serve a model it does not have. Violating one means the file
+# is wrong regardless of how plausible it looks, and the audit refuses.
+#
+# UNEXPECTED is everything else: a convention broken, an assumption that does
+# not hold on this device, a pattern seen before and worth a look. These are
+# printed and the audit passes, because a checker that refuses on a convention
+# discards findings. It nearly discarded the first cross-vendor result in this
+# corpus, and a design partner whose clean file is called contaminated does
+# not debug the tool, they stop using it.
+IMPOSSIBLE = "IMPOSSIBLE"
+UNEXPECTED = "UNEXPECTED"
+
+
 def bytes_per_param(traces, default=2.0):
     """Bytes per weight element, taken from the traces rather than assumed.
 
@@ -99,12 +118,18 @@ def check_prefill_possible(traces, peak_tflops, active_params_b, floor_ms=None):
     # 1.0 exactly is too tight: peak is a datasheet number and a card can beat
     # a conservative one. Genuine cache contamination overshoots by an order of
     # magnitude, not by a fifth.
-    if worst > 1.5:
-        problems.append(
+    if worst > 3.0:
+        problems.append((IMPOSSIBLE,
             f"implied prefill throughput reaches {worst:.1f}x the card's peak "
             f"FLOPS, which is impossible. TTFT is not measuring prefill. The "
             f"usual cause is identical prompts plus automatic prefix caching: "
-            f"the first request prefills and the rest are served from cache.")
+            f"the first request prefills and the rest are served from cache."))
+    elif worst > 1.3:
+        problems.append((UNEXPECTED,
+            f"implied prefill throughput is {worst:.2f}x the quoted peak. A "
+            f"datasheet figure can be conservative and a boost clock can beat "
+            f"it, so this is not impossible, but it is worth checking the "
+            f"floor estimate and the peak you passed."))
     return problems, worst, floor_ms
 
 
@@ -129,10 +154,10 @@ def check_ttft_scales_with_tokens(traces):
         # floor unless the floor is nearly all of TTFT, which is itself worth
         # knowing.
         if tok_ratio >= 5 and t_ratio < 1.5:
-            problems.append(
+            problems.append((UNEXPECTED,
                 f"batch {b}: {tok_ratio:.0f}x the prompt tokens costs only "
                 f"{t_ratio:.2f}x the time. Prefill is not being measured, or "
-                f"the fixed floor dominates TTFT at every length in this sweep.")
+                f"the fixed floor dominates TTFT at every length in this sweep."))
     return problems
 
 
@@ -204,12 +229,12 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
             # outlier is a finding to look at, not a reason to discard.
             rising = effs[-1] > effs[0]
             if spread > 1.35 and rising:
-                problems.append(
+                problems.append((UNEXPECTED,
                     f"batch {b}: implied bw_eff RISES {spread:.2f}x with "
                     f"context ({effs[0]:.2f} to {effs[-1]:.2f}). Longer "
                     f"context appearing cheaper per byte is the shared-cache "
                     f"signature: the key-value term is being credited with "
-                    f"bytes that were not moved.")
+                    f"bytes that were not moved."))
             elif spread > 1.35:
                 notes.append(
                     f"batch {b}: implied bw_eff FALLS {spread:.2f}x with "
@@ -220,7 +245,7 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
                     f"measurement rather than a defect. See the key-value "
                     f"path table below.")
         if effs and max(effs) > ceiling:
-            problems.append(
+            problems.append((UNEXPECTED,
                 f"batch {b}: implied bw_eff reaches {max(effs):.2f}, above "
                 f"{ceiling:.2f}. The card cannot exceed its own bandwidth; the "
                 f"byte count is too high or the timing is too short. If "
@@ -228,7 +253,7 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
                 f"datasheet peak, this is a unit error rather than a finding: "
                 f"a copy benchmark understates achievable read bandwidth, and "
                 f"passing it here produced a false CONTAMINATED verdict on a "
-                f"clean L40S file.")
+                f"clean L40S file."))
     return problems, rows, notes
 
 
@@ -263,13 +288,13 @@ def check_quant_label_plausible(traces, active_params_b, bw_tbs):
     # Bytes moved should sit within a factor of about two of the declared
     # weight size. Outside that, the label and the run disagree.
     if not 0.55 < ratio < 2.2:
-        problems.append(
+        problems.append((UNEXPECTED,
             f"declared weight_bytes={w} implies {declared_gb:.1f} GB of weights, "
             f"but batch-1 timing implies about {implied_gb:.1f} GB moved "
             f"({ratio:.2f}x). Either the quantization flag was not passed to "
             f"the server, or it was passed and the traces are labelled for the "
             f"wrong precision. Check --quantization and --kv-cache-dtype "
-            f"against the declared weight_bytes and kv_bytes.")
+            f"against the declared weight_bytes and kv_bytes."))
     return problems, ratio
 
 
@@ -283,11 +308,11 @@ def check_cell_coverage(traces):
                t.avg_output_tokens)] += 1
     thin = [c for c, n in cells.items() if n < 2]
     if thin:
-        problems.append(
+        problems.append((UNEXPECTED,
             f"{len(thin)} of {len(cells)} cells have a single observation. "
             f"A cell measured once cannot be distinguished from jitter, and a "
             f"holdout split over such a file separates repetitions rather than "
-            f"cells.")
+            f"cells."))
     return problems, len(cells)
 
 
@@ -321,6 +346,13 @@ def check_constants_match(traces, args):
         print(f"  NOTE: --model not given, so the constants above are not "
               f"checked against {models[0]!r}. Pass --model to have this "
               f"verified rather than assumed.")
+
+
+def _verdict(problems):
+    """A check that finds only convention violations has not failed."""
+    if any(sev == IMPOSSIBLE for sev, _ in problems):
+        return "IMPOSSIBLE"
+    return "review" if problems else "ok"
 
 
 def main(argv=None):
@@ -359,11 +391,11 @@ def main(argv=None):
     probs, worst, floor = check_prefill_possible(
         traces, args.peak_tflops, args.active_params_b, args.prefill_floor_ms)
     print(f"  prefill within peak       worst {worst:.2f}x peak "
-          f"(floor {floor:.0f}ms removed)   {'FAIL' if probs else 'ok'}")
+          f"(floor {floor:.0f}ms removed)   {_verdict(probs)}")
     all_problems += probs
 
     probs = check_ttft_scales_with_tokens(traces)
-    print(f"  TTFT scales with tokens   {'FAIL' if probs else 'ok'}")
+    print(f"  TTFT scales with tokens   {_verdict(probs)}")
     all_problems += probs
 
     # A microbenched d2d copy understates achievable read bandwidth, so
@@ -382,7 +414,7 @@ def main(argv=None):
 
     probs, rows, notes = check_bw_eff_is_constant(
         traces, args.bw_tbs, args.active_params_b, kvbpt, ceiling, wb)
-    print(f"  bw_eff constant           {'FAIL' if probs else 'ok'}")
+    print(f"  bw_eff constant           {_verdict(probs)}")
     for b, (effs, spread) in sorted(rows.items()):
         print(f"      b={b:<3} " + " ".join(f"{e:.2f}" for e in effs)
               + f"   spread {spread:.2f}x")
@@ -411,23 +443,43 @@ def main(argv=None):
         traces, args.active_params_b, args.bw_tbs)
     if ratio is not None:
         print(f"  quant label plausible     {ratio:.2f}x declared weights   "
-              f"{'FAIL' if probs else 'ok'}")
+              f"{_verdict(probs)}")
     all_problems += probs
 
     probs, ncells = check_cell_coverage(traces)
     print(f"  cell coverage             {ncells} cells   "
-          f"{'FAIL' if probs else 'ok'}")
+          f"{_verdict(probs)}")
     all_problems += probs
 
-    if all_problems:
-        print(f"\nCONTAMINATED: {len(all_problems)} finding"
-              f"{'s' if len(all_problems) != 1 else ''}\n")
-        for x in all_problems:
-            print(f"  x  {x}\n")
+    hard = [m for sev, m in all_problems if sev == IMPOSSIBLE]
+    soft = [m for sev, m in all_problems if sev != IMPOSSIBLE]
+
+    if soft:
+        print(f"\nFOR REVIEW: {len(soft)} item{'s' if len(soft) != 1 else ''}. "
+              f"These are conventions broken or assumptions that do not hold "
+              f"on this device. None of them make the file wrong.\n")
+        for m in soft:
+            print(f"  ?  {m}\n")
+
+    if hard:
+        print(f"\nIMPOSSIBLE: {len(hard)} finding"
+              f"{'s' if len(hard) != 1 else ''}. These describe hardware "
+              f"behaviour that cannot occur, so the file is wrong regardless "
+              f"of how plausible it looks.\n")
+        for m in hard:
+            print(f"  x  {m}\n")
         print("Do not fit anything to this file until these are resolved. A "
               "calibration over contaminated traces produces a model that "
               "predicts the contamination.")
         return 1
+
+    if soft:
+        print("No physical impossibility found. The items above are worth "
+              "reading and none of them invalidate the file.\n"
+              "Six of the ten instrument defects in this project were checks "
+              "that refused correct data, so this tool only refuses on "
+              "hardware behaviour that cannot occur.")
+        return 0
 
     print("\nCLEAN on every check above. That is not a guarantee of "
           "correctness, only that this file is not wrong in any of the ways "

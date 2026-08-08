@@ -7,7 +7,19 @@ Published because a measurement tool that has never been caught lying has not
 been used hard enough, and because the failures are more useful to anyone else
 measuring inference than the results are.
 
-**Six let bad data through. Four rejected good data.** A checker that guards
+**Four let bad data through. Six rejected good data.** An earlier version of
+this document had those the wrong way round, which understated the more
+serious of the two.
+
+The asymmetry matters. A check that lets bad data through is caught downstream
+eventually, loudly, and gets corrected. A check that refuses good data is
+silent: the cell is discarded and nobody learns what was lost. Defect 7 nearly
+discarded the first cross-vendor result in this corpus. Defect 9 blocked two
+of three commissioned runs.
+
+And the commercial consequence is worse than the engineering one. A design
+partner whose clean file is reported as contaminated does not debug the tool.
+They conclude it does not work and stop. A checker that guards
 only one direction is half a checker.
 
 **None were caught by review.** Every one was found by a physical
@@ -285,6 +297,45 @@ the two will diverge.
 **Pinned by:** `test_defect_10_precision_is_read_from_the_traces`,
 `test_defect_10_fp8_cell_passes_when_precision_is_honoured`,
 `test_defect_10_mixed_precision_in_one_file_is_refused`
+
+---
+
+## The structural cause of the six
+
+Every rejection encoded a convention as though it were a law.
+
+| The check asserted | Actually |
+| --- | --- |
+| effective bandwidth below 1.0 | a law against a datasheet peak, false against a microbenchmark |
+| effective bandwidth constant across context | true only where the device has one access pattern |
+| weights are two bytes per parameter | a bf16 convention, not physics |
+| quantization flags are present | assumes a quantized run |
+| first-token latency inverts to a utilisation | assumes no constant term |
+
+The four acceptances were the opposite problem: nothing was checking at all,
+and adding a check fixed each one.
+
+**The fix is two tiers, and only one of them refuses.**
+
+`IMPOSSIBLE` is reserved for statements about hardware that cannot be false. A
+card cannot exceed its own peak FLOPS by an order of magnitude. A duration
+cannot be negative. An endpoint cannot serve a model it does not have. A file
+violating one of these is wrong regardless of how plausible it looks, and the
+audit exits non-zero.
+
+`UNEXPECTED` is everything else, printed and passed. A convention broken, an
+assumption that does not hold on this device, a pattern seen before and worth
+reading. The audit exits zero.
+
+Thresholds are graded rather than binary for the same reason. Prefill above a
+quoted peak is nothing below 1.3x, worth reading to 3x, and impossible beyond
+it. The old bar was a flat 1.5x, which called a clean file contaminated at
+1.19x.
+
+**Verified against every case in the register:** the contaminated A100 file
+still exits 1 on a 23x overshoot. The MI300X cross-vendor finding, the clean
+SGLang file, the fp8 cell, and a file audited against the wrong denominator
+all now exit 0, with the wrong denominator named as the likely cause.
 
 ---
 

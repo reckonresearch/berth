@@ -348,3 +348,71 @@ def test_defect_10_mixed_precision_in_one_file_is_refused():
     tr[0].w_bytes = 2.0
     with pytest.raises(SystemExit, match="mixes weight precisions"):
         bytes_per_param(tr)
+
+
+# =========================================================================
+# The structural fix. Six of ten defects were checks refusing correct data,
+# and every one encoded a convention as though it were a law.
+# =========================================================================
+
+def test_only_physical_impossibility_refuses_a_file():
+    """A convention broken is worth reading. It is not grounds for rejecting
+    a measurement.
+
+    The commercial case matters more than the engineering one. A false
+    negative is caught downstream eventually. A false positive is silent: a
+    design partner whose clean file is reported as contaminated does not
+    debug the tool, they stop using it. Six of ten checks in this project
+    would have done that."""
+    from bench.audit_traces import IMPOSSIBLE, UNEXPECTED, _verdict
+    assert _verdict([]) == "ok"
+    assert _verdict([(UNEXPECTED, "convention broken")]) == "review"
+    assert _verdict([(IMPOSSIBLE, "above peak FLOPS")]) == "IMPOSSIBLE"
+    # One impossibility outranks any number of conventions.
+    assert _verdict([(UNEXPECTED, "a"), (IMPOSSIBLE, "b"),
+                     (UNEXPECTED, "c")]) == "IMPOSSIBLE"
+
+
+def test_prefill_above_peak_is_graded_not_binary():
+    """A datasheet peak can be conservative and a boost clock can beat it, so
+    1.2x is worth a look and 20x is impossible. The old bar was 1.5x flat,
+    which called a clean L40S file contaminated at 1.19x."""
+    from types import SimpleNamespace
+
+    from bench.audit_traces import IMPOSSIBLE, UNEXPECTED, check_prefill_possible
+
+    def cell(ttft_ms):
+        return [SimpleNamespace(batch=1, avg_prompt_tokens=p,
+                                avg_output_tokens=128, measured_ttft_ms=ttft_ms,
+                                measured_tpot_ms=10.0, silicon="l40s",
+                                model_name="llama3-8b")
+                for p in (512, 2048, 7680)]
+
+    # A flat TTFT means the longest prompt sets the worst ratio, so scale the
+    # timing with prompt length as a real prefill does.
+    def scaled(mult):
+        return [SimpleNamespace(batch=1, avg_prompt_tokens=p,
+                                avg_output_tokens=128,
+                                # time for p tokens at `mult` times peak
+                                measured_ttft_ms=2 * 8e9 * p / (181e12 * mult) * 1000,
+                                measured_tpot_ms=10.0, silicon="l40s",
+                                model_name="llama3-8b")
+                for p in (512, 2048, 7680)]
+
+    # 1.2x peak: inside the band where a conservative datasheet or a boost
+    # clock explains it. Nothing said at all.
+    probs, _w, _f = check_prefill_possible(scaled(1.2), 181, 8.0, floor_ms=0.0)
+    assert not probs, probs
+
+    # 1.5x: worth a look, not grounds for rejection. This is the band that
+    # called a clean L40S file contaminated at 1.19x under the old flat bar.
+    probs, worst, _f = check_prefill_possible(scaled(1.5), 181, 8.0, floor_ms=0.0)
+    assert probs and all(sev == UNEXPECTED for sev, _ in probs), (worst, probs)
+
+    # 20x peak: cache contamination. Refused.
+    probs, worst, _f = check_prefill_possible(scaled(20.0), 181, 8.0, floor_ms=0.0)
+    assert any(sev == IMPOSSIBLE for sev, _ in probs), (worst, probs)
+
+    # At peak exactly, nothing to say.
+    probs, _w, _f = check_prefill_possible(scaled(1.0), 181, 8.0, floor_ms=0.0)
+    assert not probs, probs

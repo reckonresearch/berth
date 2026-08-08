@@ -372,7 +372,7 @@ def test_shared_cache_still_fails(tmp_path):
     _synth(p, {1: 700, 4: 1400, 8: 2400, 16: 4000, 32: 7000})
     problems, _rows, _notes = check_bw_eff_is_constant(
         load_jsonl(str(p)), 5.3, 8.0, 131072)
-    assert any("RISES" in x for x in problems), problems
+    assert any("RISES" in m for _sev, m in problems), problems
 
 
 def test_kv_path_isolates_the_gather(tmp_path):
