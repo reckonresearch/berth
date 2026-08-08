@@ -618,6 +618,16 @@ def main():
     # silently compared to bf16 in the premium table.
     p.add_argument("--weight-bytes", type=float, default=2.0)
     p.add_argument("--kv-bytes", type=float, default=2.0)
+    # Grid overrides. The default ladder is coarse on purpose, but a finding
+    # sometimes sits between two rungs and the only way to see its shape is a
+    # denser sweep. The MI300X KV path is flat at batch 4 and collapsed at
+    # batch 16, and where the knee falls decides whether it is a dispatch
+    # threshold or an occupancy effect. Those are different diagnoses.
+    p.add_argument("--batches", help="comma-separated batch sizes, "
+                                     "overrides the default ladder")
+    p.add_argument("--prompts", help="comma-separated prompt token counts")
+    p.add_argument("--outputs", help="comma-separated output token counts")
+    p.add_argument("--reps", type=int, help="repetitions per cell")
     p.add_argument("--api-key", default=os.environ.get("BERTH_API_KEY"),
                    help="bearer token if the endpoint requires one "
                         "(default: $BERTH_API_KEY)")
@@ -651,7 +661,32 @@ def main():
             print("prefix caching: could not probe, recorded as unknown")
     else:
         args.silicon_provenance = "mock"
-    args.grid = DEFAULT_GRID
+    args.grid = dict(DEFAULT_GRID)
+    for flag, key in (("batches", "batch"), ("prompts", "prompt"),
+                      ("outputs", "output")):
+        raw = getattr(args, flag, None) or os.environ.get(flag.upper())
+        if raw:
+            try:
+                vals = [int(x) for x in str(raw).replace(",", " ").split()]
+            except ValueError as err:
+                raise SystemExit(
+                    f"--{flag} must be integers, got {raw!r}") from err
+            if not vals:
+                raise SystemExit(f"--{flag} is empty")
+            args.grid[key] = vals
+    reps = args.reps or os.environ.get("REPS")
+    if reps:
+        args.grid["reps"] = int(reps)
+
+    cells = (len(args.grid["batch"]) * len(args.grid["prompt"])
+             * len(args.grid["output"]))
+    if args.grid != DEFAULT_GRID:
+        print(f"grid overridden: {args.grid['batch']} x {args.grid['prompt']} "
+              f"x {args.grid['output']}, {args.grid['reps']} reps "
+              f"= {cells} cells, {cells * args.grid['reps']} traces")
+        print("NOTE: a non-default grid is recorded in the run metadata. Cells "
+              "from different grids are comparable per cell but their "
+              "aggregate error figures are not.")
     traces = run_sweep(args)
     save_jsonl(traces, args.out)
     meta_path = write_run_meta(args.out, args, traces)

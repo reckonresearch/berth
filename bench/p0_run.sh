@@ -112,9 +112,18 @@ fi
 # (bf16=2, fp8/int8=1, fp4/int4=0.5). Recorded per trace so a fp8 cell is
 # inverted as fp8, never silently compared to bf16.  Example (fp8 weights):
 #   WEIGHT_BYTES=1.0 ./bench/p0_run.sh mi300x qwen3-235b-moe Qwen/Qwen3-235B-A22B-FP8
+#
+# Grid overrides pass through the same way, so a denser sweep needs no
+# different invocation:  BATCHES="8 10 12 14 16" ./bench/p0_run.sh ...
+SWEEP_ARGS=""
+[ -n "${BATCHES:-}" ] && SWEEP_ARGS="$SWEEP_ARGS --batches $BATCHES"
+[ -n "${PROMPTS:-}" ] && SWEEP_ARGS="$SWEEP_ARGS --prompts $PROMPTS"
+[ -n "${OUTPUTS:-}" ] && SWEEP_ARGS="$SWEEP_ARGS --outputs $OUTPUTS"
+[ -n "${REPS:-}" ]    && SWEEP_ARGS="$SWEEP_ARGS --reps $REPS"
+
 python -m bench.run_sweep --base-url "$BASE_URL" --silicon "$SILICON" \
   --model "$MODEL" --model-id "$MODEL_ID" --out "$OUT/traces.jsonl" \
-  --weight-bytes "${WEIGHT_BYTES:-2.0}" --kv-bytes "${KV_BYTES:-2.0}"
+  --weight-bytes "${WEIGHT_BYTES:-2.0}" --kv-bytes "${KV_BYTES:-2.0}" $SWEEP_ARGS
 
 # 5. Term-by-term physics validation (with ceilings when available).
 if [[ -n "$BW" && -n "$FLOPS" ]]; then
