@@ -66,8 +66,30 @@ curl -sf "${BASE_URL}/v1/models" > "$OUT/server_models.json" \
   # These change the measurement and none are reportable over an
   # OpenAI-compatible API. Recorded from the launch command if it is still in
   # the process table, otherwise named as uncaptured rather than assumed.
-  ps aux | grep -oE '\-\-(max-num-seqs|max-num-batched-tokens|max-model-len|enable-chunked-prefill|tensor-parallel-size|enable-prefix-caching)(=| )[^ ]*' \
+  # Quantization flags are included deliberately. An fp8 run recorded
+  # kv_bytes=1.0 while the server ran a bf16 KV cache, because
+  # --quantization fp8 was passed and --kv-cache-dtype fp8 was not. The
+  # timings were real and the label was wrong, which is the same failure as
+  # asserting the wrong silicon.
+  ps aux | grep -oE '\-\-(max-num-seqs|max-num-batched-tokens|max-model-len|enable-chunked-prefill|tensor-parallel-size|enable-prefix-caching|quantization|kv-cache-dtype|dtype)(=| )[^ ]*' \
     | sort -u || true
+
+  # Cross-check the declared quantization against what the server was told.
+  # These must agree; a mismatch means the trace labels are wrong.
+  Q=$(ps aux | grep -oE '\-\-quantization(=| )[^ ]*' | head -1 | awk '{print $NF}')
+  KVD=$(ps aux | grep -oE '\-\-kv-cache-dtype(=| )[^ ]*' | head -1 | awk '{print $NF}')
+  echo "declared_weight_bytes: ${WEIGHT_BYTES:-2.0}   server_quantization: ${Q:-none}"
+  echo "declared_kv_bytes: ${KV_BYTES:-2.0}   server_kv_cache_dtype: ${KVD:-default(bf16)}"
+  if [ "${KV_BYTES:-2.0}" = "1.0" ] && [ -z "$KVD" ]; then
+    echo "MISMATCH: kv_bytes declared as 1.0 but --kv-cache-dtype was not passed."
+    echo "          The KV cache ran at the server default and the traces would"
+    echo "          be labelled for a quantization that was not used."
+    exit 1
+  fi
+  if [ "${WEIGHT_BYTES:-2.0}" = "1.0" ] && [ -z "$Q" ]; then
+    echo "MISMATCH: weight_bytes declared as 1.0 but --quantization was not passed."
+    exit 1
+  fi
   echo "(absent lines above mean the flag was not on the command line, so the"
   echo " server default applied; the default is version-specific)"
   echo "--- gpu ---"

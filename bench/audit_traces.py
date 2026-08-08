@@ -153,6 +153,47 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
     return problems, rows
 
 
+def check_quant_label_plausible(traces, active_params_b, bw_tbs):
+    """A declared quantization must be visible in the bytes moved.
+
+    An fp8 run recorded kv_bytes=1.0 while the server ran a bf16 KV cache,
+    because --quantization fp8 was passed and --kv-cache-dtype fp8 was not.
+    Every timing was real. The label was wrong, and nothing downstream could
+    have found it, because a wrongly labelled quantization produces perfectly
+    self-consistent numbers for a configuration that never ran.
+
+    At batch 1 and short context the KV term is negligible, so time per output
+    token is set almost entirely by weight bytes. Halving those should roughly
+    halve the time. A run declaring half-precision weights that is not
+    materially faster than one declaring full precision did not quantize.
+    """
+    problems = []
+    wb = {getattr(t, "w_bytes", 2.0) for t in traces}
+    if len(wb) > 1:
+        return problems, None
+    w = wb.pop() if wb else 2.0
+    b1 = [t for t in traces if t.batch == 1]
+    if not b1:
+        return problems, None
+    shortest = min(t.avg_prompt_tokens for t in b1)
+    tp = st.median(t.measured_tpot_ms for t in b1
+                   if t.avg_prompt_tokens == shortest)
+    implied_gb = (bw_tbs * 1e12 * 0.85 * tp / 1000) / 1e9
+    declared_gb = active_params_b * w
+    ratio = implied_gb / declared_gb if declared_gb else 0
+    # Bytes moved should sit within a factor of about two of the declared
+    # weight size. Outside that, the label and the run disagree.
+    if not 0.55 < ratio < 2.2:
+        problems.append(
+            f"declared weight_bytes={w} implies {declared_gb:.1f} GB of weights, "
+            f"but batch-1 timing implies about {implied_gb:.1f} GB moved "
+            f"({ratio:.2f}x). Either the quantization flag was not passed to "
+            f"the server, or it was passed and the traces are labelled for the "
+            f"wrong precision. Check --quantization and --kv-cache-dtype "
+            f"against the declared weight_bytes and kv_bytes.")
+    return problems, ratio
+
+
 def check_cell_coverage(traces):
     """Every cell needs enough repetitions to separate signal from jitter, and
     a holdout that splits repetitions rather than cells proves nothing."""
@@ -257,6 +298,13 @@ def main(argv=None):
     for b, (effs, spread) in sorted(rows.items()):
         print(f"      b={b:<3} " + " ".join(f"{e:.2f}" for e in effs)
               + f"   spread {spread:.2f}x")
+    all_problems += probs
+
+    probs, ratio = check_quant_label_plausible(
+        traces, args.active_params_b, args.bw_tbs)
+    if ratio is not None:
+        print(f"  quant label plausible     {ratio:.2f}x declared weights   "
+              f"{'FAIL' if probs else 'ok'}")
     all_problems += probs
 
     probs, ncells = check_cell_coverage(traces)
