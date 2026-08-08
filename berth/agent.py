@@ -135,6 +135,7 @@ class AgentRun:
     estimates_run: int = 0
     proposals: list[Proposal] = field(default_factory=list)
     suppressed: list[tuple[str, str]] = field(default_factory=list)
+    shadow: bool = False
 
     @property
     def proposal_rate(self) -> float:
@@ -147,16 +148,139 @@ class AgentRun:
         return len(self.proposals) / self.triggers_seen if self.triggers_seen else 0.0
 
 
+# ------------------------------------------------------------------- state
+
+class Outcome(StrEnum):
+    """What became of a proposal. The agent is only useful if it remembers."""
+
+    OPEN = "open"
+    MERGED = "merged"
+    REJECTED = "rejected"        # closed without merging
+    SUPERSEDED = "superseded"    # a later proposal replaced it
+    SHADOW = "shadow"            # generated but never opened
+
+
+@dataclass
+class ProposalRecord:
+    """One proposal and what happened to it."""
+
+    workload_class: str
+    from_placement: str
+    to_placement: str
+    trigger: str
+    opened_utc: str
+    outcome: Outcome = Outcome.OPEN
+    outcome_utc: str = ""
+    note: str = ""
+
+
+@dataclass
+class AgentState:
+    """What the agent knows about proposals it has already made.
+
+    Without this the loop is memoryless: three triggers in a week produce
+    three identical pull requests, and a customer who closed the first one
+    gets it again the next day. An agent that repeats itself is an agent that
+    gets muted, and a muted agent is worse than none because it looks like
+    coverage.
+    """
+
+    records: list[ProposalRecord] = field(default_factory=list)
+    # How long a rejection suppresses the same proposal. A customer who says
+    # not this quarter means not this quarter, and re-asking is how the whole
+    # channel gets muted. Re-proposing after this window is legitimate,
+    # because the world moves.
+    rejection_cooldown_days: int = 90
+
+    def open_for(self, workload_class: str, to_placement: str):
+        for r in self.records:
+            if (r.workload_class == workload_class
+                    and r.to_placement == to_placement
+                    and r.outcome == Outcome.OPEN):
+                return r
+        return None
+
+    def rejected_recently(self, workload_class: str, to_placement: str,
+                          now: datetime) -> ProposalRecord | None:
+        for r in self.records:
+            if (r.workload_class == workload_class
+                    and r.to_placement == to_placement
+                    and r.outcome == Outcome.REJECTED and r.outcome_utc):
+                age = (now - datetime.fromisoformat(
+                    r.outcome_utc.replace("Z", "+00:00"))).days
+                if age < self.rejection_cooldown_days:
+                    return r
+        return None
+
+    def record(self, proposal: Proposal, outcome: Outcome = Outcome.OPEN):
+        # A new proposal for the same class supersedes any open one, so the
+        # customer never has two live pull requests pointing different ways.
+        for r in self.records:
+            if (r.workload_class == proposal.watched.workload_class
+                    and r.outcome == Outcome.OPEN):
+                r.outcome = Outcome.SUPERSEDED
+                r.outcome_utc = proposal.created_utc
+        self.records.append(ProposalRecord(
+            workload_class=proposal.watched.workload_class,
+            from_placement=proposal.decision.incumbent,
+            to_placement=proposal.decision.recommended,
+            trigger=str(proposal.trigger),
+            opened_utc=proposal.created_utc,
+            outcome=outcome))
+
+    def resolve(self, workload_class: str, outcome: Outcome, note: str = "",
+                when: str = ""):
+        """Record what a customer did. Called by whatever watches the repo."""
+        for r in self.records:
+            if r.workload_class == workload_class and r.outcome == Outcome.OPEN:
+                r.outcome = outcome
+                r.outcome_utc = when or datetime.now(UTC).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ")
+                r.note = note
+                return r
+        return None
+
+    @property
+    def merge_rate(self) -> float:
+        """Share of resolved proposals the customer merged.
+
+        The second kill criterion, and a better one than the proposal rate:
+        an agent whose proposals are consistently rejected is producing
+        correct arithmetic that nobody wants, which is a product problem
+        rather than a threshold problem.
+        """
+        resolved = [r for r in self.records
+                    if r.outcome in (Outcome.MERGED, Outcome.REJECTED)]
+        if not resolved:
+            return 0.0
+        return sum(1 for r in resolved if r.outcome == Outcome.MERGED) / len(resolved)
+
+
 # ------------------------------------------------------------------- the loop
 
 def evaluate(watched: WatchedClass, trigger: Trigger, decision: Decision,
-             ) -> tuple[bool, str]:
+             state: AgentState | None = None,
+             now: datetime | None = None) -> tuple[bool, str]:
     """Whether this decision should become a pull request.
 
     Returns (propose, reason). The reason is recorded either way, because a
     suppressed trigger is evidence about the trigger set and the kill
     criterion is computed from it.
     """
+    now = now or datetime.now(UTC)
+    if state is not None:
+        already = state.open_for(watched.workload_class, decision.recommended)
+        if already:
+            return False, (f"the same proposal is already open, from "
+                           f"{already.opened_utc}. Repeating it is how the "
+                           f"channel gets muted")
+        rejected = state.rejected_recently(watched.workload_class,
+                                           decision.recommended, now)
+        if rejected:
+            return False, (f"the customer rejected this move on "
+                           f"{rejected.outcome_utc[:10]} and the cooldown has "
+                           f"not elapsed. A rejection is an answer")
+
     if not decision.feasible:
         # Worth proposing: an infeasible incumbent is a problem the customer
         # has whether or not a better placement exists.
@@ -247,7 +371,8 @@ def build_proposal(watched: WatchedClass, trigger: Trigger, decision: Decision,
 
 def run(watched_classes, resolve_decision, detect_triggers,
         *, traces_url="https://docs.reckonresearch.com/validation-p0/",
-        render_diff=None) -> AgentRun:
+        render_diff=None, state: AgentState | None = None,
+        shadow: bool = False, now: datetime | None = None) -> AgentRun:
     """One pass over every class the agent is holding.
 
     `resolve_decision(watched, trigger) -> Decision` and
@@ -256,20 +381,41 @@ def run(watched_classes, resolve_decision, detect_triggers,
     customer can run it against their own sources.
     """
     result = AgentRun()
+    seen_this_run = set()
     for w in watched_classes:
         for trig in detect_triggers(w):
             result.triggers_seen += 1
             decision = resolve_decision(w, trig)
             result.estimates_run += 1
-            propose, reason = evaluate(w, trig, decision)
+            # Several triggers in one pass can reach the same conclusion. The
+            # first one proposes; the rest would be duplicates within a single
+            # run, which no amount of persisted state would catch.
+            key = (w.workload_class, decision.recommended)
+            if key in seen_this_run:
+                result.suppressed.append(
+                    (w.workload_class,
+                     "an earlier trigger in this run already reached this "
+                     "conclusion"))
+                continue
+            propose, reason = evaluate(w, trig, decision, state, now)
             if not propose:
                 result.suppressed.append((w.workload_class, reason))
                 continue
             diff = (render_diff(w, decision) if render_diff
                     else default_diff(w, decision))
-            result.proposals.append(
-                build_proposal(w, trig, decision, config_diff=diff,
-                               traces_url=traces_url))
+            proposal = build_proposal(w, trig, decision, config_diff=diff,
+                                      traces_url=traces_url)
+            seen_this_run.add(key)
+            result.proposals.append(proposal)
+            if state is not None:
+                # Shadow mode records without opening anything, which is how
+                # the agent earns the right to be trusted with a pull request:
+                # run it against your own corpus for a quarter and read what
+                # it would have said.
+                state.record(proposal,
+                             Outcome.SHADOW if shadow else Outcome.OPEN)
+    if shadow:
+        result.shadow = True
     return result
 
 

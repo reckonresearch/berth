@@ -6,6 +6,8 @@ none because it looks like coverage. Most of these tests are about silence.
 """
 
 
+import pytest
+
 from berth.agent import (
     AgentRun,
     Decision,
@@ -186,3 +188,99 @@ def test_margin_is_zero_when_the_incumbent_cost_is_unknown():
     d = _decision(incumbent_cost=0.0)
     assert d.margin == 0.0
     assert not d.clears_band
+
+
+# =========================================================================
+# State. Without it the loop is memoryless, and three triggers in a week
+# produce three identical pull requests.
+# =========================================================================
+
+def test_the_same_proposal_is_not_opened_twice():
+    """Found by red team: three triggers, one unchanged decision, three
+    identical pull requests. That is the muting failure mode directly."""
+    from berth.agent import AgentState
+    state = AgentState()
+    r = run([_watched()], resolve_decision=lambda w, t: _decision(),
+            detect_triggers=lambda w: [Trigger.MODEL_VERSION,
+                                       Trigger.PRICE_CHANGE,
+                                       Trigger.CORPUS_CELL],
+            state=state)
+    assert len(r.proposals) == 1, [p.title for p in r.proposals]
+    assert len(r.suppressed) == 2
+    assert any("earlier trigger in this run" in why for _c, why in r.suppressed)
+
+
+def test_a_proposal_open_from_a_previous_run_suppresses_the_next():
+    from berth.agent import AgentState
+    state = AgentState()
+    run([_watched()], lambda w, t: _decision(),
+        lambda w: [Trigger.MODEL_VERSION], state=state)
+    second = run([_watched()], lambda w, t: _decision(),
+                 lambda w: [Trigger.PRICE_CHANGE], state=state)
+    assert not second.proposals
+    assert "already open" in second.suppressed[0][1]
+
+
+def test_a_rejection_is_an_answer_and_holds_for_the_cooldown():
+    """A customer who closes a pull request saying not this quarter means
+    not this quarter. Re-asking the next day is how the channel gets muted."""
+    from datetime import UTC, datetime, timedelta
+
+    from berth.agent import AgentState, Outcome
+    state = AgentState()
+    run([_watched()], lambda w, t: _decision(),
+        lambda w: [Trigger.MODEL_VERSION], state=state)
+    state.resolve("voice-agent-prod", Outcome.REJECTED,
+                  note="not moving off H100 this quarter")
+
+    soon = run([_watched()], lambda w, t: _decision(),
+               lambda w: [Trigger.PRICE_CHANGE], state=state)
+    assert not soon.proposals
+    assert "rejected" in soon.suppressed[0][1]
+
+    # After the cooldown it is legitimate to ask again, because the world moves.
+    later = run([_watched()], lambda w, t: _decision(),
+                lambda w: [Trigger.PRICE_CHANGE], state=state,
+                now=datetime.now(UTC) + timedelta(days=120))
+    assert later.proposals, "a rejection is not permanent"
+
+
+def test_a_new_proposal_supersedes_an_open_one():
+    """A customer must never hold two live pull requests pointing different
+    ways at the same workload."""
+    from berth.agent import AgentState, Outcome
+    state = AgentState()
+    run([_watched()], lambda w, t: _decision(),
+        lambda w: [Trigger.MODEL_VERSION], state=state)
+    run([_watched()], lambda w, t: _decision(recommended="mi300x"),
+        lambda w: [Trigger.CORPUS_CELL], state=state)
+    open_now = [r for r in state.records if r.outcome == Outcome.OPEN]
+    assert len(open_now) == 1
+    assert open_now[0].to_placement == "mi300x"
+    assert any(r.outcome == Outcome.SUPERSEDED for r in state.records)
+
+
+def test_shadow_mode_records_without_opening():
+    """The roadmap says run it against our own corpus for a quarter before a
+    customer depends on it. That needs a mode, not a promise."""
+    from berth.agent import AgentState, Outcome
+    state = AgentState()
+    r = run([_watched()], lambda w, t: _decision(),
+            lambda w: [Trigger.MODEL_VERSION], state=state, shadow=True)
+    assert r.shadow and r.proposals
+    assert state.records[0].outcome == Outcome.SHADOW
+
+
+def test_merge_rate_is_the_second_kill_criterion():
+    """An agent whose proposals are consistently rejected is producing correct
+    arithmetic nobody wants, which is a product problem rather than a
+    threshold problem."""
+    from berth.agent import AgentState, Outcome, ProposalRecord
+    state = AgentState()
+    state.records = [
+        ProposalRecord("a", "x", "y", "t", "2026-01-01T00:00:00Z", Outcome.MERGED),
+        ProposalRecord("b", "x", "y", "t", "2026-01-01T00:00:00Z", Outcome.REJECTED),
+        ProposalRecord("c", "x", "y", "t", "2026-01-01T00:00:00Z", Outcome.REJECTED),
+        ProposalRecord("d", "x", "y", "t", "2026-01-01T00:00:00Z", Outcome.OPEN),
+    ]
+    assert state.merge_rate == pytest.approx(1 / 3)
