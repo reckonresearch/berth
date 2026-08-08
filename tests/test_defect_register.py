@@ -228,3 +228,71 @@ def test_defect_1_floor_is_removed_before_inverting_ttft(tmp_path):
                                                   floor_ms=FLOOR)
     assert not with_floor, f"floor removed, should pass: worst {worst:.2f}x"
     assert worst < 1.5
+
+
+# =========================================================================
+# Defect 9. A guard that blocked the runs it was meant to protect.
+# Family: assumption. Direction: rejected good data.
+# =========================================================================
+
+def _run_guard(fake_ps_line, weight_bytes=None, kv_bytes=None):
+    """Execute the quantization guard from p0_run.sh with a stubbed process
+    list, so all four flag combinations can be exercised without a server."""
+    import subprocess
+    env = {"PATH": "/usr/bin:/bin"}
+    if weight_bytes:
+        env["WEIGHT_BYTES"] = weight_bytes
+    if kv_bytes:
+        env["KV_BYTES"] = kv_bytes
+    script = f'''
+set -euo pipefail
+ps() {{ echo "{fake_ps_line}"; }}
+Q=$(ps aux | grep -oE '\\-\\-quantization(=| )[^ ]*' | head -1 | awk '{{print $NF}}' || true)
+KVD=$(ps aux | grep -oE '\\-\\-kv-cache-dtype(=| )[^ ]*' | head -1 | awk '{{print $NF}}' || true)
+if [ "${{KV_BYTES:-2.0}}" = "1.0" ] && [ -z "$KVD" ]; then echo REFUSE_KV; exit 1; fi
+if [ "${{WEIGHT_BYTES:-2.0}}" = "1.0" ] && [ -z "$Q" ]; then echo REFUSE_W; exit 1; fi
+echo PASS
+'''
+    r = subprocess.run(["bash", "-c", script], capture_output=True,
+                       text=True, env=env)
+    return r.returncode, r.stdout.strip()
+
+
+def test_defect_9_bf16_run_is_not_blocked_by_the_quantization_guard():
+    """The guard ran under `set -euo pipefail`, and grep exits 1 when it
+    matches nothing. A bf16 server has neither quantization flag, so the
+    assignment failed and the script exited silently before measuring
+    anything. The check written to catch mislabelled runs made the common
+    case the broken one, and two of three commissioned cells did not run."""
+    code, out = _run_guard("python -m vllm --model llama --max-num-seqs 64")
+    assert code == 0 and out == "PASS", f"bf16 must run: {code} {out}"
+
+
+def test_defect_9_fp8_weights_only_is_not_blocked():
+    """Weights quantized, key-value cache left at the default, declared
+    honestly. A legitimate cell that the guard also killed."""
+    code, out = _run_guard(
+        "python -m vllm --model llama --quantization fp8",
+        weight_bytes="1.0")
+    assert code == 0 and out == "PASS", f"fp8 weights must run: {code} {out}"
+
+
+def test_defect_9_guard_still_refuses_a_label_the_server_contradicts():
+    """The original purpose survives the fix: declaring fp8 key-value without
+    passing the flag is still refused."""
+    code, out = _run_guard(
+        "python -m vllm --model llama --quantization fp8",
+        weight_bytes="1.0", kv_bytes="1.0")
+    assert code == 1 and out == "REFUSE_KV", f"{code} {out}"
+
+    code, out = _run_guard("python -m vllm --model llama", weight_bytes="1.0")
+    assert code == 1 and out == "REFUSE_W", f"{code} {out}"
+
+
+def test_defect_9_fully_declared_fp8_passes():
+    """Both flags present and both labels declared: the configuration that
+    was the only one working before the fix, and it must keep working."""
+    code, out = _run_guard(
+        "python -m vllm --model llama --quantization fp8 --kv-cache-dtype fp8",
+        weight_bytes="1.0", kv_bytes="1.0")
+    assert code == 0 and out == "PASS", f"{code} {out}"

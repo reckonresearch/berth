@@ -7,7 +7,7 @@ Published because a measurement tool that has never been caught lying has not
 been used hard enough, and because the failures are more useful to anyone else
 measuring inference than the results are.
 
-**Six let bad data through. Two rejected good data.** A checker that guards
+**Six let bad data through. Three rejected good data.** A checker that guards
 only one direction is half a checker.
 
 **None were caught by review.** Every one was found by a physical
@@ -25,6 +25,7 @@ inside documentation warning against it.
 | Units | 5, 6 | a quantity used where a different one of the same shape was meant |
 | Assumption | 4, 7 | a checker asserting a property the system does not have |
 | Ratio | 1 | a constant term left inside a division |
+| Assumption | 9 | a guard that blocked the runs it was written to protect |
 
 ---
 
@@ -219,6 +220,40 @@ materially faster did not quantize.
 
 ---
 
+## 9. A guard that blocked the runs it protected
+
+**Mechanism:** assumption. **Direction:** rejected good data.
+
+The quantization guard added for defect 8 read the server's launch flags with
+`ps aux | grep`. The script runs under `set -euo pipefail`, and grep exits 1
+when it matches nothing, so the assignment failed and the script exited
+silently before measuring anything.
+
+A bf16 server has neither quantization flag. The check written to catch
+mislabelled runs therefore made the ordinary case the broken one, and two of
+three commissioned cells did not run. The only configuration that worked was
+the one with both flags present.
+
+Found by the operator, who noticed the pattern across three attempts and
+reported it precisely: it only worked when both flags were on the command
+line.
+
+**Fix:** `|| true` on both captures. Trivial, and the reason it was missed is
+worth more than the fix: the guard had a test for the case it was meant to
+refuse and no test for the case it was meant to allow. Every one of the four
+combinations is now pinned.
+
+**Rule:** a guard needs a test for what it permits, not only for what it
+blocks. Three of nine defects here rejected correct data, and each of them
+had a test for the failure path only.
+
+**Pinned by:** `test_defect_9_bf16_run_is_not_blocked_by_the_quantization_guard`,
+`test_defect_9_fp8_weights_only_is_not_blocked`,
+`test_defect_9_guard_still_refuses_a_label_the_server_contradicts`,
+`test_defect_9_fully_declared_fp8_passes`
+
+---
+
 ## What actually prevents the next one
 
 **Physical impossibility, not statistical thresholds.** A card cannot exceed
@@ -234,7 +269,9 @@ defects were the same field problem in three different fields.
 handed to a function expecting a different float. They are now impossible at
 the call site rather than detectable afterwards.
 
-**Guard both directions.** Two of the eight rejected correct measurements. A
+**Guard both directions, and test both.** Three of the nine rejected correct
+measurements, and every one had a test for the path it was meant to block and
+none for the path it was meant to allow. A
 checker that only catches bad data will eventually discard a finding, and the
 one it discarded here was the most valuable cell in the corpus.
 

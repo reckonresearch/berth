@@ -76,8 +76,13 @@ curl -sf "${BASE_URL}/v1/models" > "$OUT/server_models.json" \
 
   # Cross-check the declared quantization against what the server was told.
   # These must agree; a mismatch means the trace labels are wrong.
-  Q=$(ps aux | grep -oE '\-\-quantization(=| )[^ ]*' | head -1 | awk '{print $NF}')
-  KVD=$(ps aux | grep -oE '\-\-kv-cache-dtype(=| )[^ ]*' | head -1 | awk '{print $NF}')
+  # `|| true` is load-bearing. The script runs under `set -euo pipefail`, and
+  # grep exits 1 when it matches nothing. Without this, a server launched
+  # without a quantization flag kills the assignment and the run exits
+  # silently before measuring anything. A bf16 cell has neither flag, which
+  # made the common case the broken one.
+  Q=$(ps aux | grep -oE '\-\-quantization(=| )[^ ]*' | head -1 | awk '{print $NF}' || true)
+  KVD=$(ps aux | grep -oE '\-\-kv-cache-dtype(=| )[^ ]*' | head -1 | awk '{print $NF}' || true)
   echo "declared_weight_bytes: ${WEIGHT_BYTES:-2.0}   server_quantization: ${Q:-none}"
   echo "declared_kv_bytes: ${KV_BYTES:-2.0}   server_kv_cache_dtype: ${KVD:-default(bf16)}"
   if [ "${KV_BYTES:-2.0}" = "1.0" ] && [ -z "$KVD" ]; then
