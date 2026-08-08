@@ -30,6 +30,37 @@ def _median_by(traces, keyfn, valfn):
     return {k: st.median(v) for k, v in d.items()}
 
 
+def bytes_per_param(traces, default=2.0):
+    """Bytes per weight element, taken from the traces rather than assumed.
+
+    The auditor hardcoded 2.0. On an fp8 cell that counts 16 GB of weights for
+    an 8 GB model, inflates implied bandwidth above 1.0 on every batch, and
+    reports a correctly labelled file as contaminated. The traces carry the
+    figure already; the checker just was not reading it.
+    """
+    vals = {getattr(t, "w_bytes", None) for t in traces}
+    vals.discard(None)
+    if len(vals) > 1:
+        raise SystemExit(f"file mixes weight precisions {sorted(vals)}. Audit "
+                         f"one precision at a time; the byte accounting is "
+                         f"per precision and a shared answer is wrong for both.")
+    return vals.pop() if vals else default
+
+
+def kv_bytes_from(traces, declared):
+    """Key-value bytes per token, scaled by the precision the traces record.
+
+    --kv-bytes-per-token is quoted at bf16 by convention, because that is how
+    the model card states it. An fp8 cache halves it, and the traces know
+    which was served.
+    """
+    vals = {getattr(t, "kv_bytes", None) for t in traces}
+    vals.discard(None)
+    if len(vals) > 1:
+        raise SystemExit(f"file mixes key-value precisions {sorted(vals)}.")
+    return declared * (vals.pop() / 2.0) if vals else declared
+
+
 def check_prefill_possible(traces, peak_tflops, active_params_b, floor_ms=None):
     """TTFT implies a prefill rate. That rate cannot exceed the card's peak.
 
@@ -137,7 +168,7 @@ def kv_path_bandwidth(traces, kv_bytes_per_token):
 
 
 def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token,
-                             ceiling=1.0):
+                             ceiling=1.0, w_bytes=2.0):
     """Effective bandwidth on a single access pattern is a device property.
 
     Drift with context at batch > 1, while batch 1 stays flat, is the
@@ -160,7 +191,8 @@ def check_bw_eff_is_constant(traces, bw_tbs, active_params_b, kv_bytes_per_token
         for p in sorted(lens):
             tp = st.median(x.measured_tpot_ms for x in lens[p])
             ctx = p + lens[p][0].avg_output_tokens // 2
-            floor_ms = (active_params_b * 1e9 * 2 + b * ctx * kv_bytes_per_token) \
+            floor_ms = (active_params_b * 1e9 * w_bytes
+                        + b * ctx * kv_bytes_per_token) \
                 / (bw_tbs * 1e12) * 1000
             if tp > 0:
                 effs.append(floor_ms / tp)
@@ -338,9 +370,18 @@ def main(argv=None):
     # bw_eff computed against it legitimately exceeds 1. Raise the bar rather
     # than reporting physics as contamination.
     ceiling = 1.35 if args.bw_is_microbench else 1.0
+    # Precision comes from the traces, not from an assumption. See
+    # bytes_per_param: hardcoding 2.0 reported a correct fp8 file as
+    # contaminated on every batch.
+    wb = bytes_per_param(traces)
+    kvbpt = kv_bytes_from(traces, args.kv_bytes_per_token)
+    if wb != 2.0 or kvbpt != args.kv_bytes_per_token:
+        print(f"  precision from traces: weights {wb} B/param, "
+              f"key-value {kvbpt/1024:.0f} KB/token "
+              f"(declared {args.kv_bytes_per_token/1024:.0f} at bf16)")
+
     probs, rows, notes = check_bw_eff_is_constant(
-        traces, args.bw_tbs, args.active_params_b, args.kv_bytes_per_token,
-        ceiling)
+        traces, args.bw_tbs, args.active_params_b, kvbpt, ceiling, wb)
     print(f"  bw_eff constant           {'FAIL' if probs else 'ok'}")
     for b, (effs, spread) in sorted(rows.items()):
         print(f"      b={b:<3} " + " ".join(f"{e:.2f}" for e in effs)
@@ -350,7 +391,7 @@ def main(argv=None):
     # Reported whenever the grid supports it, not only when something fails.
     # A device with two access patterns is the interesting case and it should
     # not take a failure to surface it.
-    kv = kv_path_bandwidth(traces, args.kv_bytes_per_token)
+    kv = kv_path_bandwidth(traces, kvbpt)
     if len(kv) >= 2:
         vals = list(kv.values())
         span = max(vals) / min(vals)

@@ -7,7 +7,7 @@ Published because a measurement tool that has never been caught lying has not
 been used hard enough, and because the failures are more useful to anyone else
 measuring inference than the results are.
 
-**Six let bad data through. Three rejected good data.** A checker that guards
+**Six let bad data through. Four rejected good data.** A checker that guards
 only one direction is half a checker.
 
 **None were caught by review.** Every one was found by a physical
@@ -26,6 +26,7 @@ inside documentation warning against it.
 | Assumption | 4, 7 | a checker asserting a property the system does not have |
 | Ratio | 1 | a constant term left inside a division |
 | Assumption | 9 | a guard that blocked the runs it was written to protect |
+| Units | 10 | a precision assumed rather than read from the file it was in |
 
 ---
 
@@ -254,6 +255,39 @@ had a test for the failure path only.
 
 ---
 
+## 10. Precision assumed rather than read
+
+**Mechanism:** units. **Direction:** rejected good data.
+
+The auditor computed weight bytes as parameters times two, hardcoded. On a
+correctly labelled fp8 cell that counts 16 GB of weights for an 8 GB model,
+which inflates implied bandwidth to 1.16 on every batch and reports the file
+as contaminated.
+
+The figure was in the traces. Every record carries `w_bytes` and `kv_bytes`,
+the quantization guard added for defect 8 reads them, and the bandwidth check
+sitting beside it did not. One checker knew the precision and the other
+assumed it.
+
+Reported by the tool as an impossible bandwidth, which is the right behaviour
+for the wrong reason: it refused a file it could not reconcile, and named its
+own assumption as contamination.
+
+**Fix:** `bytes_per_param` and `kv_bytes_from` read the precision from the
+traces, and refuse a file mixing two precisions because the byte accounting is
+per precision and a shared answer is wrong for both. Honouring the label moves
+this cell from 1.16 to 0.58 and from contaminated to clean.
+
+**Rule:** if the data carries a fact, no check may assume it. An assumption
+that duplicates something already recorded is a second source of truth, and
+the two will diverge.
+
+**Pinned by:** `test_defect_10_precision_is_read_from_the_traces`,
+`test_defect_10_fp8_cell_passes_when_precision_is_honoured`,
+`test_defect_10_mixed_precision_in_one_file_is_refused`
+
+---
+
 ## What actually prevents the next one
 
 **Physical impossibility, not statistical thresholds.** A card cannot exceed
@@ -269,9 +303,14 @@ defects were the same field problem in three different fields.
 handed to a function expecting a different float. They are now impossible at
 the call site rather than detectable afterwards.
 
-**Guard both directions, and test both.** Three of the nine rejected correct
+**Guard both directions, and test both.** Four of the ten rejected correct
 measurements, and every one had a test for the path it was meant to block and
-none for the path it was meant to allow. A
+none for the path it was meant to allow.
+
+**If the data carries a fact, no check may assume it.** Defect 10 was a
+checker assuming a precision that every record in the file already stated.
+Any assumption duplicating something recorded is a second source of truth,
+and the two diverge on the first cell that is not the default. A
 checker that only catches bad data will eventually discard a finding, and the
 one it discarded here was the most valuable cell in the corpus.
 

@@ -296,3 +296,55 @@ def test_defect_9_fully_declared_fp8_passes():
         "python -m vllm --model llama --quantization fp8 --kv-cache-dtype fp8",
         weight_bytes="1.0", kv_bytes="1.0")
     assert code == 0 and out == "PASS", f"{code} {out}"
+
+
+# =========================================================================
+# Defect 10. Precision assumed rather than read from the file it was in.
+# Family: units. Direction: rejected good data.
+# =========================================================================
+
+def _fp8_cell():
+    """A correctly labelled fp8 cell: half-precision weights and cache."""
+    from types import SimpleNamespace
+    out = []
+    for b in (1, 8, 32):
+        for ctx in (512, 2048, 7680):
+            # 8 GB of fp8 weights at ~1.9 TB/s, plus fp8 cache at 64 KB/token
+            t = (8.03 / 1900 + (b * (ctx + 64) * 65536 / 1e9) / 1900) * 1000
+            out.append(SimpleNamespace(
+                silicon="h100-sxm", model_name="llama3-8b", batch=b,
+                avg_prompt_tokens=ctx, avg_output_tokens=128,
+                measured_ttft_ms=40.0 + ctx * 0.01 * b,
+                measured_tpot_ms=t, w_bytes=1.0, kv_bytes=1.0))
+    return out
+
+
+def test_defect_10_precision_is_read_from_the_traces():
+    """The auditor hardcoded two bytes per parameter. On an fp8 cell that
+    counts 16 GB of weights for an 8 GB model, which inflates implied
+    bandwidth above 1.0 on every batch and reports a correctly labelled file
+    as contaminated. The figure was in the traces the whole time."""
+    from bench.audit_traces import bytes_per_param, kv_bytes_from
+    tr = _fp8_cell()
+    assert bytes_per_param(tr) == 1.0
+    # --kv-bytes-per-token is quoted at bf16 by convention; an fp8 cache halves it
+    assert kv_bytes_from(tr, 131072) == 65536
+
+
+def test_defect_10_fp8_cell_passes_when_precision_is_honoured():
+    from bench.audit_traces import bytes_per_param, check_bw_eff_is_constant, kv_bytes_from
+    tr = _fp8_cell()
+    wrong, _, _ = check_bw_eff_is_constant(tr, 3.35, 8.0, 131072, 1.0, 2.0)
+    right, _, _ = check_bw_eff_is_constant(
+        tr, 3.35, 8.0, kv_bytes_from(tr, 131072), 1.0, bytes_per_param(tr))
+    assert wrong, "assuming bf16 on an fp8 file must look impossible"
+    assert not right, f"honouring the label must pass: {right}"
+
+
+def test_defect_10_mixed_precision_in_one_file_is_refused():
+    """Byte accounting is per precision. A shared answer is wrong for both."""
+    from bench.audit_traces import bytes_per_param
+    tr = _fp8_cell()
+    tr[0].w_bytes = 2.0
+    with pytest.raises(SystemExit, match="mixes weight precisions"):
+        bytes_per_param(tr)
