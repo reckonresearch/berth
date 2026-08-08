@@ -39,6 +39,7 @@ happens monthly or faster and it is visible on a release calendar.
 | **sounding** | the harness. Drives a live endpoint and produces the traces that check the estimator. Never imports the estimator, by design and by test | shipped |
 | **The Placement Index** | the public reference. Ranks placements rather than models, workload-conditional | live at reckonresearch.com/index/ |
 | **Pilot** | the control plane. Decides where a workload runs, watches for change, and proposes a move as a pull request. Never touches a request | built, untested against a customer |
+| **The declaration** | `.berth/classes.yaml` in the customer's own repository. What Pilot may watch, which paths it may write, what bound each class holds | built |
 | **Receipts** | the artifact. A conforming record settling one measurement period | built |
 | **CUW-SLO** | the specification. How a conforming measurement is made and recorded | written |
 | **The Placement Holdout Protocol** | how a saving is proven. Declared baseline, held-out traffic, verified delta | written, never run |
@@ -187,9 +188,10 @@ renegotiating every baseline.
 
 ### Blocking, and on us
 
-- **Docs for seven modules.** `place`, `holdout`, `receipt`, `agent`, `watch`,
-  `github` and `quantities` have no page on docs.reckonresearch.com. The code
-  is public and undocumented, which is worse than either alone.
+- **Docs for eight modules.** `place`, `holdout`, `receipt`, `agent`, `watch`,
+  `github`, `declaration` and `quantities` have no page on
+  docs.reckonresearch.com. The code is public and undocumented, which is worse
+  than either alone.
 - **The protocol, business model and roadmap live in a chat, not the repo.**
   `HOLDOUT_PROTOCOL.md` is the asset that makes savings-share contractible and
   it is not published.
@@ -272,6 +274,40 @@ and twelve months is the honest version.
 $400k, what would you pay for that proof?* A percentage-shaped answer is the
 $1B path. A flat few thousand is the tools business. It costs nothing and it
 resolves more than any model.
+
+---
+
+## 7b. What is public and what is not
+
+Nothing already published is pulled back; that costs more credibility than it
+protects. The line going forward is the one performance contracting drew:
+**the protocol is public and the measurements are the product.** IPMVP is
+public. An energy service company's data on a specific building is not.
+
+**Public, permanently**
+
+| | Why |
+| --- | --- |
+| The unit specification | A unit nobody may use is not a unit |
+| The Placement Holdout Protocol | Adoption by non-customers is the whole verification revenue line |
+| berth, the estimator | Anyone can re-run our numbers is the entire credibility claim |
+| sounding | Contributors need it |
+| The receipt format | A record only we can read is not a record |
+| Gateway templates and the declaration schema | Removes the integration barrier |
+| DEFECTS.md | Nobody else publishes this |
+| The agent's suppression logic | The claim that we do not spam you has to be checkable |
+
+**Private from here**
+
+- **Calibration constants beyond published cells.** The model is open and the
+  fitted values are the product. `place.py` now loads bands from data via
+  `BERTH_CORPUS_BANDS`, so the published corpus and a licensed one are
+  different files against the same estimator.
+- **The tuned trigger set.** Publishing how to poll a registry is fine.
+  Which changes actually move a placement, at what thresholds and on what
+  cadence, is learned by running it and belongs in configuration.
+- **Everything customer-specific.** Baselines, receipts, traces, declarations.
+- **The hosted operation.** Scheduling, state, credentials.
 
 ---
 

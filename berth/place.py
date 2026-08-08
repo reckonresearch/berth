@@ -31,13 +31,32 @@ from berth.workload import MODELS, WorkloadSpec, profile
 # that rests on it, because a prior has been observed above 40 percent error
 # in this corpus and a buyer moving production traffic deserves to know which
 # kind of number they are looking at.
-MEASURED_CELLS = {
-    ("l40s", "llama3-8b"): 0.106,
-    ("h100-pcie", "llama3-8b"): 0.042,
-    ("h100-sxm", "llama3-8b"): 0.042,
-    ("mi300x", "llama3-8b"): 0.106,
-    ("a100-80g", "qwen3-30b-a3b"): 0.376,
-}
+def _load_bands():
+    """Published error per measured cell, from data rather than from code.
+
+    The model is open source and the measurements are the product. Keeping
+    the bands in a data file rather than a literal is what lets the published
+    corpus and a licensed one be different files against the same estimator,
+    and it means adding a cell does not require a release.
+
+    Falls back to the published set, so the package works standalone.
+    """
+    import json
+    import os
+    path = os.environ.get("BERTH_CORPUS_BANDS")
+    if path:
+        with open(path) as f:
+            return {(c["silicon"], c["model"]): c["band"] for c in json.load(f)}
+    return {
+        ("l40s", "llama3-8b"): 0.106,
+        ("h100-pcie", "llama3-8b"): 0.042,
+        ("h100-sxm", "llama3-8b"): 0.042,
+        ("mi300x", "llama3-8b"): 0.106,
+        ("a100-80g", "qwen3-30b-a3b"): 0.376,
+    }
+
+
+MEASURED_CELLS = _load_bands()
 
 # Applied where no cell covers the placement. Not a confidence interval: an
 # admission that the error is unbounded, set at a level that suppresses
