@@ -40,6 +40,7 @@ happens monthly or faster and it is visible on a release calendar.
 | **The Placement Index** | the public reference. Ranks placements rather than models, workload-conditional | live at reckonresearch.com/index/ |
 | **Pilot** | the control plane. Decides where a workload runs, watches for change, and proposes a move as a pull request. Never touches a request | built, untested against a customer |
 | **The declaration** | `.berth/classes.yaml` in the customer's own repository. What Pilot may watch, which paths it may write, what bound each class holds | built |
+| **The status page** | `.berth/STATUS.md`, rewritten on every pass. Every class, what it holds, what is recommended now, open proposals, settled periods, sources polled | built |
 | **Receipts** | the artifact. A conforming record settling one measurement period | built |
 | **CUW-SLO** | the specification. How a conforming measurement is made and recorded | written |
 | **The Placement Holdout Protocol** | how a saving is proven. Declared baseline, held-out traffic, verified delta | written, never run |
@@ -296,6 +297,7 @@ public. An energy service company's data on a specific building is not.
 | Gateway templates and the declaration schema | Removes the integration barrier |
 | DEFECTS.md | Nobody else publishes this |
 | The agent's suppression logic | The claim that we do not spam you has to be checkable |
+| The status page format | It lives in the customer's repo; a format only we can render would defeat that |
 
 **Private from here**
 
