@@ -62,6 +62,7 @@ class WatchState:
     """
 
     model_versions: dict[str, str] = field(default_factory=dict)
+    stack_versions: dict[str, str] = field(default_factory=dict)
     prices: dict[str, float] = field(default_factory=dict)
     corpus_cells: set[tuple[str, str]] = field(default_factory=set)
     last_polled: dict[str, str] = field(default_factory=dict)
@@ -110,6 +111,42 @@ def watch_models(model_ids, state: WatchState, *, fetch=fetch_json,
     return changed
 
 
+def watch_serving_stacks(repos, state: WatchState, *, fetch=fetch_json,
+                         base="https://api.github.com/repos/"):
+    """Yield (repo, old, new) for every serving stack that cut a release.
+
+    This is the trigger with the most evidence behind it and the last one
+    added, which is the wrong order. On one H100 SXM, with the same card,
+    model and precision, moving from vLLM 0.5.5 to 0.25 was worth 1.48x at
+    batch 1 and 2.70x at batch 32 with short prompts. That is larger than most
+    placement decisions this system makes, and no term in the estimator
+    accounts for it.
+
+    Two consequences. A customer on an old stack has a bigger lever available
+    than any chip choice, and telling them so is worth more than any
+    recommendation we could otherwise make. And every measured cell is
+    version-conditional, so a release makes the corpus stale in a way nothing
+    else does.
+    """
+    changed = []
+    for repo in repos:
+        try:
+            payload = fetch(f"{base}{repo}/releases/latest")
+        except WatchError:
+            continue
+        tag = payload.get("tag_name")
+        if not tag:
+            continue
+        old = state.stack_versions.get(repo)
+        state.stack_versions[repo] = tag
+        state.note_poll(f"stack:{repo}")
+        if old is None:
+            continue
+        if old != tag:
+            changed.append((repo, old, tag))
+    return changed
+
+
 def watch_prices(price_source, state: WatchState):
     """Yield (silicon, old, new) for every rate that moved beyond the epsilon.
 
@@ -152,7 +189,7 @@ def watch_corpus(cells, state: WatchState):
 # --------------------------------------------------------- the trigger view
 
 def build_detector(state: WatchState, *, price_source=None, corpus_cells=None,
-                   fetch=fetch_json):
+                   stack_repos=None, fetch=fetch_json):
     """Return a `detect_triggers(watched) -> [Trigger]` for the agent.
 
     Polls once per call across all sources, then answers per workload class
@@ -160,7 +197,7 @@ def build_detector(state: WatchState, *, price_source=None, corpus_cells=None,
     class watching the same model, which is both wasteful and a good way to
     get rate limited.
     """
-    fired = {"models": {}, "prices": {}, "corpus": set()}
+    fired = {"models": {}, "prices": {}, "corpus": set(), "stacks": {}}
 
     def poll(model_ids):
         for mid, _old, new in watch_models(model_ids, state, fetch=fetch):
@@ -173,6 +210,10 @@ def build_detector(state: WatchState, *, price_source=None, corpus_cells=None,
                 pass
         if corpus_cells is not None:
             fired["corpus"] = set(watch_corpus(corpus_cells, state))
+        if stack_repos:
+            for repo, _old, new in watch_serving_stacks(stack_repos, state,
+                                                        fetch=fetch):
+                fired["stacks"][repo] = new
 
     def detect(watched):
         triggers = []
@@ -182,6 +223,10 @@ def build_detector(state: WatchState, *, price_source=None, corpus_cells=None,
             triggers.append(Trigger.PRICE_CHANGE)
         if any(m == watched.model_key for _s, m in fired["corpus"]):
             triggers.append(Trigger.CORPUS_CELL)
+        # A stack release touches every class, because the effect is on the
+        # server rather than on any one workload.
+        if fired["stacks"]:
+            triggers.append(Trigger.STACK_VERSION)
         return triggers
 
     detect.poll = poll

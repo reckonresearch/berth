@@ -1,0 +1,67 @@
+# Pilot, watching our own corpus.
+#
+# We do not run production inference, so these are not workload classes in the
+# commercial sense. They are the cells we have measured, declared as classes so
+# the agent tells us when one goes stale: a model version ships, a stack cuts a
+# release, or a new cell changes what the corpus says about an old one.
+#
+# This is the shadow deployment the roadmap requires before any customer
+# depends on it. Read what it would have said for a quarter, then decide
+# whether it has earned the right to open a pull request in someone's
+# repository.
+version: 1
+repo:
+  allowed_paths:
+    - .berth/STATUS.md
+classes:
+  - name: corpus-llama3-8b-conversation
+    model_id: NousResearch/Meta-Llama-3-8B
+    model: llama3-8b
+    running_on: h100-pcie
+    config_path: .berth/STATUS.md
+    slo:
+      metric: p99_ttft_ms
+      bound_ms: 1000
+    workload:
+      concurrency: 8
+      prompt_tokens: 2048
+      output_tokens: 128
+
+  - name: corpus-llama3-8b-voice
+    model_id: NousResearch/Meta-Llama-3-8B
+    model: llama3-8b
+    running_on: l40s
+    config_path: .berth/STATUS.md
+    slo:
+      metric: p99_ttft_ms
+      bound_ms: 300
+    workload:
+      concurrency: 4
+      prompt_tokens: 512
+      output_tokens: 128
+
+  - name: corpus-llama3-8b-longcontext
+    model_id: NousResearch/Meta-Llama-3-8B
+    model: llama3-8b
+    running_on: mi300x
+    config_path: .berth/STATUS.md
+    slo:
+      metric: p99_ttft_ms
+      bound_ms: 5000
+    workload:
+      concurrency: 16
+      prompt_tokens: 7680
+      output_tokens: 256
+
+  - name: corpus-qwen3-moe
+    model_id: Qwen/Qwen3-30B-A3B
+    model: qwen3-30b-a3b
+    running_on: a100-80g
+    config_path: .berth/STATUS.md
+    slo:
+      metric: p99_ttft_ms
+      bound_ms: 2000
+    workload:
+      concurrency: 8
+      prompt_tokens: 2048
+      output_tokens: 128

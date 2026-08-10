@@ -26,6 +26,7 @@ from berth.estimate import KV_PRESSURE_WARN, estimate
 from berth.silicon import FLEET
 from berth.workload import MODELS, WorkloadSpec, profile
 
+
 # Cells measured against hardware, with the published error on each. Anything
 # absent is spec-sheet arithmetic and is labelled as such on every decision
 # that rests on it, because a prior has been observed above 40 percent error

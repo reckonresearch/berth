@@ -233,3 +233,44 @@ def test_open_proposal_refuses_before_touching_anything():
 def test_a_missing_token_is_refused_at_construction():
     with pytest.raises(GitHubError, match="token"):
         GitHubClient("")
+
+
+# ------------------------------------------------- serving stack versions
+
+def test_a_stack_release_fires_once():
+    """The trigger with the most evidence behind it. On one H100 SXM, same
+    card and model, vLLM 0.5.5 to 0.25 was worth 1.48x at batch 1 and 2.70x at
+    batch 32, which is larger than most placement decisions this system
+    makes."""
+    from berth.watch import watch_serving_stacks
+    st = WatchState()
+    watch_serving_stacks(["vllm-project/vllm"], st,
+                         fetch=lambda _u: {"tag_name": "v0.25.0"})
+    fired = watch_serving_stacks(["vllm-project/vllm"], st,
+                                 fetch=lambda _u: {"tag_name": "v0.26.0"})
+    assert fired == [("vllm-project/vllm", "v0.25.0", "v0.26.0")]
+    assert watch_serving_stacks(["vllm-project/vllm"], st,
+                                fetch=lambda _u: {"tag_name": "v0.26.0"}) == []
+
+
+def test_a_stack_release_touches_every_class():
+    """The effect is on the server rather than on any one workload, so every
+    class watching that stack is re-estimated."""
+    from berth.agent import Trigger
+    st = WatchState(stack_versions={"vllm-project/vllm": "v0.25.0"})
+    detect = build_detector(st, stack_repos=["vllm-project/vllm"],
+                            fetch=lambda _u: {"tag_name": "v0.26.0"})
+    detect.poll([])
+
+    class W:
+        model_id = "unrelated/model"
+        model_key = "llama3-8b"
+        current_silicon = "l40s"
+
+    assert Trigger.STACK_VERSION in detect(W())
+
+
+def test_an_unreleased_repo_is_not_a_change():
+    from berth.watch import watch_serving_stacks
+    st = WatchState()
+    assert watch_serving_stacks(["x/y"], st, fetch=lambda _u: {}) == []

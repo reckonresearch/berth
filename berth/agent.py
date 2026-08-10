@@ -45,6 +45,7 @@ class Trigger(StrEnum):
     PRICE_CHANGE = "price_change"        # a provider moved a rate
     CORPUS_CELL = "corpus_cell"          # a measurement replaced a prior
     SLO_CHANGE = "slo_change"            # the customer changed the bound
+    STACK_VERSION = "stack_version"      # the serving stack cut a release
     SCHEDULED = "scheduled"              # periodic re-check, no external event
 
 

@@ -4,3 +4,8 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Pilot shadow state. The declaration is committed; what it has seen is not.
+.berth/pilot-state.json
+.berth/pilot-runs.jsonl
+.berth/pilot.log
