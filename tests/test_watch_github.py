@@ -274,3 +274,56 @@ def test_an_unreleased_repo_is_not_a_change():
     from berth.watch import watch_serving_stacks
     st = WatchState()
     assert watch_serving_stacks(["x/y"], st, fetch=lambda _u: {}) == []
+
+
+# ------------------------------------ never worked versus did not change
+
+def test_an_unreachable_source_is_recorded_not_swallowed():
+    """Skipping on error is right: an outage must not fire the agent. But it
+    made never worked indistinguishable from worked and did not move, and the
+    first shadow run of this system had every remote source dead behind an SSL
+    failure while the output read as a normal quiet pass."""
+    st = WatchState()
+
+    def down(_url):
+        raise WatchError("SSL: CERTIFICATE_VERIFY_FAILED")
+
+    assert watch_models(["org/model"], st, fetch=down) == []
+    assert "model:org/model" in st.unreachable
+    assert "CERTIFICATE" in st.unreachable["model:org/model"]
+    assert "model:org/model" not in st.last_polled
+
+
+def test_a_source_that_recovers_clears_its_entry():
+    """A source that comes back must stop being reported as broken, or the
+    warning becomes furniture and nobody reads it."""
+    st = WatchState()
+
+    def down(_url):
+        raise WatchError("503")
+
+    watch_models(["org/model"], st, fetch=down)
+    assert st.unreachable
+    watch_models(["org/model"], st, fetch=lambda _u: _hf("abc"))
+    assert not st.unreachable
+    assert "model:org/model" in st.last_polled
+
+
+def test_a_stack_source_records_unreachability_too():
+    from berth.watch import watch_serving_stacks
+    st = WatchState()
+
+    def down(_url):
+        raise WatchError("rate limited")
+
+    watch_serving_stacks(["vllm-project/vllm"], st, fetch=down)
+    assert "stack:vllm-project/vllm" in st.unreachable
+
+
+def test_each_pass_starts_from_a_clean_slate():
+    """A source that failed last week and works today must not still be
+    reported as broken."""
+    st = WatchState(unreachable={"model:stale": "old failure"})
+    detect = build_detector(st, fetch=lambda _u: _hf("abc"))
+    detect.poll(["org/model"])
+    assert "model:stale" not in st.unreachable

@@ -66,6 +66,16 @@ class WatchState:
     prices: dict[str, float] = field(default_factory=dict)
     corpus_cells: set[tuple[str, str]] = field(default_factory=set)
     last_polled: dict[str, str] = field(default_factory=dict)
+    # Sources that were tried and failed on this pass, with the reason.
+    #
+    # A source is skipped on error so an outage does not fire the agent, which
+    # is right. But it made a source that has never worked indistinguishable
+    # from one that worked and reported no change, and the first shadow run of
+    # this system had every remote source dead behind an SSL failure while the
+    # output read as a normal quiet pass. An agent whose sources are all broken
+    # reporting a quiet week is the worst failure a monitor has, and it is the
+    # same shape as a guard that fails toward silence.
+    unreachable: dict[str, str] = field(default_factory=dict)
     # A price that moves by less than this is noise. Providers adjust rates by
     # fractions of a percent constantly and none of it changes a placement.
     price_epsilon: float = 0.02
@@ -94,10 +104,13 @@ def watch_models(model_ids, state: WatchState, *, fetch=fetch_json,
     for mid in model_ids:
         try:
             payload = fetch(f"{base}{mid}")
-        except WatchError:
-            # A registry being unreachable is not a change. Recording it as one
-            # would fire the agent on an outage.
+        except WatchError as e:
+            # Unreachable is not a change, so nothing fires. But it is recorded
+            # rather than swallowed, because never worked and did not move must
+            # not look the same in a log somebody reads three months later.
+            state.unreachable[f"model:{mid}"] = str(e)[:160]
             continue
+        state.unreachable.pop(f"model:{mid}", None)
         rev = model_revision(payload)
         if rev is None:
             continue
@@ -132,8 +145,10 @@ def watch_serving_stacks(repos, state: WatchState, *, fetch=fetch_json,
     for repo in repos:
         try:
             payload = fetch(f"{base}{repo}/releases/latest")
-        except WatchError:
+        except WatchError as e:
+            state.unreachable[f"stack:{repo}"] = str(e)[:160]
             continue
+        state.unreachable.pop(f"stack:{repo}", None)
         tag = payload.get("tag_name")
         if not tag:
             continue
@@ -200,14 +215,16 @@ def build_detector(state: WatchState, *, price_source=None, corpus_cells=None,
     fired = {"models": {}, "prices": {}, "corpus": set(), "stacks": {}}
 
     def poll(model_ids):
+        state.unreachable.clear()
         for mid, _old, new in watch_models(model_ids, state, fetch=fetch):
             fired["models"][mid] = new
         if price_source is not None:
             try:
                 for sil, _old, new in watch_prices(price_source, state):
                     fired["prices"][sil] = new
-            except WatchError:
-                pass
+                state.unreachable.pop("prices", None)
+            except WatchError as e:
+                state.unreachable["prices"] = str(e)[:160]
         if corpus_cells is not None:
             fired["corpus"] = set(watch_corpus(corpus_cells, state))
         if stack_repos:

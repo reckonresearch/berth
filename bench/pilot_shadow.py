@@ -79,12 +79,13 @@ def save_state(ws: WatchState, ags: AgentState):
         "stack_versions": ws.stack_versions,
         "prices": ws.prices,
         "corpus_cells": sorted(ws.corpus_cells),
+        "unreachable": ws.unreachable,
         "last_polled": ws.last_polled,
         "records": [{**asdict(r), "outcome": str(r.outcome)} for r in ags.records],
     }, indent=2))
 
 
-def log_run(result: AgentRun, first: bool):
+def log_run(result: AgentRun, first: bool, unreachable=None):
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with LOG_PATH.open("a") as f:
         f.write(json.dumps({
@@ -94,6 +95,7 @@ def log_run(result: AgentRun, first: bool):
             "estimates": result.estimates_run,
             "proposals": [p.title for p in result.proposals],
             "suppressed": result.suppressed,
+            "unreachable": dict(unreachable or {}),
         }) + "\n")
 
 
@@ -113,6 +115,12 @@ def summarise():
                   "coverage. Retune the triggers or drop the feature.")
         else:
             print("  Above the kill criterion.")
+    dead = sum(1 for r in runs if r.get("unreachable"))
+    if dead:
+        print(f"{dead} of {len(runs)} passes had at least one unreachable "
+              f"source. A pass that reached nothing is not evidence that "
+              f"nothing changed, and the rate above is computed over all of "
+              f"them.")
     reasons = {}
     for r in runs:
         for _cls, why in r["suppressed"]:
@@ -188,6 +196,21 @@ def main(argv=None):
               "because we do not yet know whether anything changed.")
     for src, when in sorted(ws.last_polled.items()):
         print(f"  polled  {src:<34} {when[:16].replace('T', ' ')}")
+    for src, why in sorted(ws.unreachable.items()):
+        print(f"  UNREACHABLE  {src:<29} {why}")
+
+    # A pass where nothing could be reached is not a quiet pass. Saying so is
+    # the difference between the log being evidence and being noise, and the
+    # first run of this system had every remote source dead behind an SSL
+    # failure while the output read as normal.
+    remote = [s for s in ws.last_polled if s.startswith(("model:", "stack:"))]
+    if ws.unreachable and not remote:
+        print("\n  NO REMOTE SOURCE WAS REACHED on this pass. Everything below "
+              "comes from the local corpus alone, so an absence of triggers "
+              "here means nothing about whether the world moved.")
+    elif ws.unreachable:
+        print(f"\n  {len(ws.unreachable)} source(s) unreachable. Triggers below "
+              f"are from the sources that did answer.")
     print(f"\n  triggers {result.triggers_seen}   proposals "
           f"{len(result.proposals)}   suppressed {len(result.suppressed)}")
     for cls, why in result.suppressed:
@@ -215,7 +238,7 @@ def main(argv=None):
         print("\n  wrote .berth/STATUS.md")
 
     save_state(ws, ags)
-    log_run(result, first)
+    log_run(result, first, ws.unreachable)
     return 0
 
 
