@@ -385,3 +385,33 @@ def test_kv_path_isolates_the_gather(tmp_path):
     kv = kv_path_bandwidth(load_jsonl(str(p)), 131072)
     assert abs(kv[8] - 2000) / 2000 < 0.05
     assert abs(kv[32] - 500) / 500 < 0.05
+
+
+# -- non-NVIDIA silicon -----------------------------------------------------
+
+def test_trainium_and_tpu_are_in_the_fleet():
+    """A cell cannot be run against silicon the fleet does not know, and an
+    operator discovering that on the box wastes a rental."""
+    from berth.silicon import FLEET
+    for key in ("tpu-v6e", "tpu-v5e", "trn1", "trn2"):
+        assert key in FLEET, key
+
+
+def test_trainium_is_quoted_per_device_not_per_instance():
+    """Every other entry in the fleet is one device. A trn1.32xlarge carries
+    sixteen, and quoting the instance would make the ranking incoherent."""
+    from berth.silicon import FLEET
+    assert FLEET["trn1"].mem_gb == 32
+    assert FLEET["trn1"].base_price_hr < 2.0
+
+
+def test_a_device_too_small_for_the_weights_is_excluded_with_that_reason():
+    """tpu-v5e has 16 GB and Llama-3-8B needs 16 GB of bf16 weights. The
+    estimator should say there is no room for a cache rather than ranking it."""
+    from berth.place import decide
+    rec = decide(workload_class="x", model_key="llama3-8b",
+                 incumbent="h100-pcie", slo_bound_ms=10_000, batch=8,
+                 prompt_tokens=512, output_tokens=128)
+    tiny = [c for c in rec.excluded if c["silicon"] == "tpu-v5e"]
+    assert tiny, "a device that cannot hold the weights must be excluded"
+    assert "weights alone" in tiny[0]["excluded_reason"]

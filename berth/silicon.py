@@ -84,5 +84,11 @@ FLEET: dict[str, SiliconProfile] = {
         # first-compile is warm-up, excluded; steady-state floor is what we fit).
         SiliconProfile("tpu-v6e",   "tpu", peak_tflops=918,  hbm_bw_tbs=1.64, mem_gb=32,  base_price_hr=4.20),
         SiliconProfile("tpu-v5e",   "tpu", peak_tflops=197,  hbm_bw_tbs=0.819, mem_gb=16, base_price_hr=1.20),
+        # AWS Trainium. Per-accelerator figures, not per-instance: a trn1.32xlarge
+        # carries 16 of these and a trn2.48xlarge carries 16 of the second. Quoting
+        # the instance would make the fleet inconsistent, since every other entry
+        # here is one device.
+        SiliconProfile("trn1",      "neuron", peak_tflops=190, hbm_bw_tbs=0.820, mem_gb=32, base_price_hr=1.34),
+        SiliconProfile("trn2",      "neuron", peak_tflops=650, hbm_bw_tbs=2.90,  mem_gb=96, base_price_hr=3.45),
     ]
 }
