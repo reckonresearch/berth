@@ -302,6 +302,53 @@ def run_sweep(args) -> list[TraceRecord]:
     return traces
 
 
+def sample_device_power(silicon: str) -> tuple[float | None, str | None]:
+    """Median device power in watts during a sweep, or None with a reason.
+
+    Device boundary only. No facility multiplier and no assumed cooling
+    overhead: both are real and neither is measurable from a rented instance,
+    and multiplying a measured figure by an assumed one produces a number
+    whose provenance cannot be stated.
+
+    Returns None where the platform exposes nothing to a tenant, which is the
+    case on TPU and Trainium. An absent figure is the honest record; a
+    substituted TDP is not, because a thermal design point is a rating rather
+    than an observation and the two would be indistinguishable downstream.
+    """
+    import shutil
+    import subprocess
+
+    probes = [
+        ("nvidia-smi", ["nvidia-smi", "--query-gpu=power.draw",
+                        "--format=csv,noheader,nounits"]),
+        ("rocm-smi", ["rocm-smi", "--showpower", "--csv"]),
+    ]
+    for name, cmd in probes:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=10, check=True).stdout
+        except (subprocess.SubprocessError, OSError):
+            continue
+        vals = []
+        for line in out.splitlines():
+            for tok in line.replace(",", " ").split():
+                try:
+                    v = float(tok)
+                except ValueError:
+                    continue
+                # Plausible device draw. A stray index or temperature would
+                # otherwise be read as watts.
+                if 5.0 < v < 2000.0:
+                    vals.append(v)
+                    break
+        if vals:
+            vals.sort()
+            return vals[len(vals) // 2], f"sampled:{name}"
+    return None, None
+
+
 # v1: original.
 # v2: TWO different v2s were minted in parallel branches, one adding
 #     w_bytes/kv_bytes and one adding source. Neither is a superset of the
@@ -314,8 +361,10 @@ def run_sweep(args) -> list[TraceRecord]:
 # The recurrence is the lesson: a schema number minted on a branch is a
 # promise about a shared namespace, and two branches cannot both keep it.
 # Bump on merge, not on the branch.
-SCHEMA_VERSION = 4
-SUPPORTED_SCHEMAS = (1, 2, 3, 4)
+# v5: power_w and power_provenance. Minted on one line and merged
+#     immediately, which is the rule the v2 and v3 collisions taught.
+SCHEMA_VERSION = 5
+SUPPORTED_SCHEMAS = (1, 2, 3, 4, 5)
 
 
 def save_jsonl(traces: list[TraceRecord], path: str) -> None:
@@ -337,6 +386,12 @@ def load_jsonl(path: str) -> list[TraceRecord]:
             v = d.pop("schema", 1)
             if v not in SUPPORTED_SCHEMAS:
                 raise ValueError(f"trace schema v{v} unsupported (loader is v{SCHEMA_VERSION})")
+            if v < 5:
+                # Pre-v5 files predate power sampling. Absent is the
+                # correct record: the sweep did not measure it, and a
+                # zero would be a measurement of no draw.
+                d.setdefault("power_w", None)
+                d.setdefault("power_provenance", None)
             if v < SCHEMA_VERSION:
                 # Every version below the current one is missing at least one
                 # field, and which one depends on the branch that wrote it, so

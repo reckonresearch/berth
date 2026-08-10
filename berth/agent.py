@@ -80,6 +80,18 @@ class Decision:
     prior_cells: int
     feasible: bool
     reason_infeasible: str | None = None
+    # Cost of making the move, as a fraction of the incumbent's cost over the
+    # period the decision is expected to hold. Redeployment, cache warm-up on
+    # the new placement, and the risk that a move made this week is reversed
+    # next week.
+    #
+    # Without it the loop is an oscillator waiting for a price feed. Two
+    # placements a few percent apart will trade the lead every time a rate
+    # card moves, and each swap costs real money while the estimate that
+    # justified it was never wrong. Damping is a property of adaptation
+    # itself, not a policy laid over it, which is why it lives in the decision
+    # rather than in a threshold somewhere upstream.
+    switching_cost: float = 0.03
 
     @property
     def margin(self) -> float:
@@ -89,14 +101,25 @@ class Decision:
         return (self.incumbent_cost - self.recommended_cost) / self.incumbent_cost
 
     @property
-    def clears_band(self) -> bool:
-        """Whether the improvement is larger than the uncertainty on it.
+    def hurdle(self) -> float:
+        """What the gain must beat: the uncertainty plus the cost of moving.
 
-        This is the gate that decides whether anything is proposed. A
-        recommendation inside the noise floor is not a recommendation, and
-        acting on one spends the customer's attention on a coin flip.
+        Two terms because they fail differently. A gain inside the confidence
+        band might not exist. A gain smaller than the switching cost exists
+        and is not worth collecting.
         """
-        return self.margin > self.confidence_band
+        return self.confidence_band + self.switching_cost
+
+    @property
+    def clears_band(self) -> bool:
+        """Whether the improvement is worth acting on.
+
+        The gate that decides whether anything is proposed. A recommendation
+        inside the noise floor is not a recommendation, and one that costs
+        more to enact than it returns is worse than silence because it looks
+        like progress.
+        """
+        return self.margin > self.hurdle
 
     @property
     def rests_on_measurement(self) -> bool:
@@ -295,9 +318,15 @@ def evaluate(watched: WatchedClass, trigger: Trigger, decision: Decision,
         return False, "the answer did not change"
 
     if not decision.clears_band:
-        return False, (f"improvement of {decision.margin:.1%} sits inside the "
-                       f"confidence band of {decision.confidence_band:.1%}, so "
-                       f"it is not distinguishable from noise")
+        if decision.margin <= decision.confidence_band:
+            return False, (f"improvement of {decision.margin:.1%} sits inside "
+                           f"the confidence band of "
+                           f"{decision.confidence_band:.1%}, so it is not "
+                           f"distinguishable from noise")
+        return False, (f"improvement of {decision.margin:.1%} clears the "
+                       f"{decision.confidence_band:.1%} band but not the "
+                       f"{decision.switching_cost:.1%} cost of moving. The "
+                       f"gain is real and smaller than collecting it")
 
     return True, (f"{decision.margin:.1%} improvement against a "
                   f"{decision.confidence_band:.1%} band")
@@ -334,6 +363,8 @@ def build_proposal(watched: WatchedClass, trigger: Trigger, decision: Decision,
         f"| cost per Mtok | ${d.incumbent_cost:.3f} | ${d.recommended_cost:.3f} |",
         f"| improvement | | {saving} |",
         f"| confidence band | | plus or minus {d.confidence_band:.1%} |",
+        f"| cost of moving | | {d.switching_cost:.1%} |",
+        f"| hurdle cleared | | {d.margin:.1%} against {d.hurdle:.1%} |",
         "",
         f"Bound held: {watched.slo_metric} under {watched.slo_bound_ms:.0f} ms "
         f"at concurrency {watched.batch}, {watched.prompt_tokens} prompt "

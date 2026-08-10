@@ -38,6 +38,7 @@ knows; nothing here requires them to understand the estimator.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import dataclass as _dc
 
 from berth.agent import WatchedClass
 from berth.github import RepoTarget
@@ -54,6 +55,38 @@ class DeclarationError(ValueError):
     """
 
 
+@_dc(frozen=True)
+class Constraints:
+    """Narrowings on the search, declared separately and deliberately.
+
+    A declaration carries declared axes: the model, the workload shape, the
+    service level. Those define the problem. Chips, providers and price bases
+    are chosen by the engine and are the search space.
+
+    Pinning a provider or a price basis is neither. It is a narrowing of the
+    search, usually for a reason that has nothing to do with cost: an existing
+    commitment, a data residency rule, a security review that took six months.
+    Putting it in `running_on` would make a constraint look like a fact about
+    the workload, and the engine would then be unable to tell a preference
+    from a physical property.
+
+    Stated separately, and stated as narrowing, so the status page can say
+    what the answer would have been without it. A customer who is paying more
+    because of a constraint they no longer need should be able to see that.
+    """
+
+    providers: tuple[str, ...] = ()      # empty means every provider
+    price_bases: tuple[str, ...] = ("on-demand",)
+    interruption_tolerant: bool = False
+    exclude_silicon: tuple[str, ...] = ()
+    reason: str = ""
+
+    @property
+    def narrows(self) -> bool:
+        return bool(self.providers or self.exclude_silicon
+                    or set(self.price_bases) != {"on-demand"})
+
+
 @dataclass
 class Declaration:
     """One parsed `.berth/classes.yaml`."""
@@ -61,6 +94,7 @@ class Declaration:
     version: int
     allowed_paths: tuple[str, ...]
     classes: list[WatchedClass] = field(default_factory=list)
+    constraints: dict[str, Constraints] = field(default_factory=dict)
     default_branch: str = "main"
 
     def repo_target(self, owner: str, name: str) -> RepoTarget:
@@ -116,6 +150,18 @@ def parse(raw: dict, repo: str = "") -> Declaration:
                 f"having the agent infer permission from use.")
         slo = _require(c, "slo", where)
         wl = _require(c, "workload", where)
+
+        # A constraint that arrives inside a declared axis is refused, because
+        # the engine cannot then tell a preference from a physical property.
+        for wrong in ("provider", "price_basis", "instance_type"):
+            if wrong in c:
+                raise DeclarationError(
+                    f"{where} carries {wrong!r} as a declared axis. Chips, "
+                    f"providers and price bases are chosen by the engine, not "
+                    f"declared. If you need to narrow the search, put it in a "
+                    f"`constraints:` block on this class and say why, so the "
+                    f"status page can show what the answer would have been "
+                    f"without it.")
         classes.append(WatchedClass(
             workload_class=_require(c, "name", where),
             model_id=_require(c, "model_id", where),
@@ -144,8 +190,28 @@ def parse(raw: dict, repo: str = "") -> Declaration:
             f"the agent tracks state against, so two of the same would make "
             f"proposals and their outcomes ambiguous.")
 
+    cons = {}
+    for c in raw.get("classes") or []:
+        blk = c.get("constraints")
+        if not blk:
+            continue
+        bad = set(blk.get("price_bases") or ()) - {"spot", "on-demand", "reserved"}
+        if bad:
+            raise DeclarationError(f"unknown price bases {sorted(bad)}")
+        cons[c["name"]] = Constraints(
+            providers=tuple(blk.get("providers") or ()),
+            price_bases=tuple(blk.get("price_bases") or ("on-demand",)),
+            interruption_tolerant=bool(blk.get("interruption_tolerant", False)),
+            exclude_silicon=tuple(blk.get("exclude_silicon") or ()),
+            reason=blk.get("reason", ""))
+        if cons[c["name"]].narrows and not cons[c["name"]].reason:
+            raise DeclarationError(
+                f"class {c['name']!r} narrows the search without a reason. A "
+                f"constraint costs money and the reason is what lets anyone "
+                f"tell later whether it is still worth paying.")
+
     return Declaration(version=version, allowed_paths=allowed,
-                       classes=classes,
+                       classes=classes, constraints=cons,
                        default_branch=repo_block.get("default_branch", "main"))
 
 

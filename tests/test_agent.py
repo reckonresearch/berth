@@ -284,3 +284,41 @@ def test_merge_rate_is_the_second_kill_criterion():
         ProposalRecord("d", "x", "y", "t", "2026-01-01T00:00:00Z", Outcome.OPEN),
     ]
     assert state.merge_rate == pytest.approx(1 / 3)
+
+
+# -- damping ----------------------------------------------------------------
+
+def test_a_gain_smaller_than_the_cost_of_collecting_it_is_held():
+    """Without this the loop is an oscillator waiting for a price feed. Two
+    placements a few percent apart trade the lead every time a rate card
+    moves, and each swap costs real money while the estimate that justified it
+    was never wrong."""
+    d = _decision(recommended_cost=0.470, incumbent_cost=0.505,
+                  confidence_band=0.02, switching_cost=0.10)
+    assert d.margin > d.confidence_band, "the gain is real"
+    assert not d.clears_band, "and smaller than collecting it"
+    propose, reason = evaluate(_watched(), Trigger.PRICE_CHANGE, d)
+    assert not propose
+    assert "cost of moving" in reason
+
+
+def test_the_two_hold_reasons_are_distinguished():
+    """A gain inside the band might not exist. A gain below the switching cost
+    exists and is not worth having. Different problems, different answers."""
+    noise = _decision(recommended_cost=0.500, incumbent_cost=0.505,
+                      confidence_band=0.10, switching_cost=0.03)
+    _p, r1 = evaluate(_watched(), Trigger.PRICE_CHANGE, noise)
+    assert "not distinguishable from noise" in r1
+
+    real = _decision(recommended_cost=0.480, incumbent_cost=0.505,
+                     confidence_band=0.02, switching_cost=0.10)
+    _p, r2 = evaluate(_watched(), Trigger.PRICE_CHANGE, real)
+    assert "gain is real and smaller" in r2
+
+
+def test_the_hurdle_is_stated_in_the_proposal():
+    """A reviewer should see what the gain had to beat, not just that it did."""
+    p = build_proposal(_watched(), Trigger.MODEL_VERSION, _decision(),
+                       config_diff="x", traces_url="https://t")
+    assert "cost of moving" in p.body
+    assert "hurdle cleared" in p.body

@@ -25,6 +25,17 @@ sellable, because a token arriving after its deadline is not a token.
 **The unit.** One output token delivered inside its latency target and above a
 declared quality floor. A served token.
 
+**The axes, split by who sets them.** Three are declared by the customer and
+define the problem: the model, the workload shape, the service level. Three
+are chosen by the engine and are the search space: chips, providers, and price
+basis. A flat list of six hides that split, and the split is what makes the
+category coherent.
+
+**Energy is in the unit, not yet in the meter.** The specification names it as
+a dimension. The instrument began sampling device power at schema 5 and has
+measured no cell with it. Saying the instrument covers energy would be the
+exact shape of claim the provenance rules exist to prevent.
+
 **The frequency, which is what makes it a business rather than an audit.**
 Every model version silently invalidates a placement, and nobody checks. That
 happens monthly or faster and it is visible on a release calendar.
@@ -43,6 +54,7 @@ happens monthly or faster and it is visible on a release calendar.
 | **The status page** | `.berth/STATUS.md`, rewritten on every pass. Every class, what it holds, what is recommended now, open proposals, settled periods, sources polled | built |
 | **Receipts** | the artifact. A conforming record settling one measurement period | built |
 | **versus** | self-host or API, on one axis. Cost per compliant token both sides, with the break-even volume | built |
+| **Price basis** | spot, on-demand and reserved as distinct candidates. A basis is not a discount, it is a different placement with a different risk, and the service level decides whether the cheaper one is admissible | built |
 | **CUW-SLO** | the specification. How a conforming measurement is made and recorded | written |
 | **The Placement Holdout Protocol** | how a saving is proven. Declared baseline, held-out traffic, verified delta | written, never run |
 

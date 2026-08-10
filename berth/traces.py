@@ -48,6 +48,29 @@ class TraceRecord:
     # except the label, and the label is the part the corpus indexes on.
     silicon_provenance: str = "self_reported"
 
+    # Device power during the sweep, watts, median across samples. Schema 5.
+    #
+    # Added now because the schema can still be versioned cheaply. There are no
+    # external contributors yet, so a field costs a version bump; once there
+    # are, it costs a migration. The window closes on its own.
+    #
+    # Energy is a declared dimension of the unit and has never been a measured
+    # term in this instrument. Stating it that way rather than claiming the
+    # instrument covers it is the same rule that governs every other number
+    # here: the unit names energy, the meter does not yet weigh it, and the
+    # gap belongs in the open rather than in a footnote.
+    #
+    # Device boundary only. No facility multiplier, no PUE, no assumed
+    # cooling overhead. Those are real and they are not measurable from a
+    # rented instance, and multiplying a measured figure by an assumed one
+    # produces a number whose provenance cannot be stated.
+    power_w: float | None = None
+    # How the figure was obtained: "sampled" from nvidia-smi or rocm-smi
+    # during the run, or absent where the platform exposes nothing. A TPU or
+    # a Trainium reports no per-device power to a tenant, so those cells will
+    # carry None and that is the honest record rather than a gap to fill.
+    power_provenance: str | None = None
+
     def __post_init__(self):
         # A mock trace and a hardware trace are otherwise indistinguishable on
         # disk, and the contribution path is a pull request. One unlabelled

@@ -104,3 +104,69 @@ def test_the_declaration_produces_the_repo_target_the_client_enforces():
     from berth.github import RefusedByPolicy
     with pytest.raises(RefusedByPolicy):
         t.check("deploy/other.yaml")
+
+
+# -- declared axes versus chosen axes ---------------------------------------
+
+def test_pinning_a_provider_inside_a_class_is_refused():
+    """Chips, providers and price bases are chosen by the engine. A constraint
+    arriving as a declared axis makes a preference indistinguishable from a
+    physical property."""
+    raw = {"version": 1, "repo": {"allowed_paths": ["a.yaml"]},
+           "classes": [{"name": "v", "model_id": "o/m", "model": "llama3-8b",
+                        "running_on": "l40s", "config_path": "a.yaml",
+                        "provider": "aws",
+                        "slo": {"bound_ms": 800},
+                        "workload": {"concurrency": 1, "prompt_tokens": 1,
+                                     "output_tokens": 1}}]}
+    with pytest.raises(DeclarationError, match="chosen by the engine"):
+        parse(raw)
+
+
+def test_a_narrowing_constraint_needs_a_reason():
+    """A constraint costs money, and the reason is what lets anyone tell later
+    whether it is still worth paying."""
+    raw = {"version": 1, "repo": {"allowed_paths": ["a.yaml"]},
+           "classes": [{"name": "v", "model_id": "o/m", "model": "llama3-8b",
+                        "running_on": "l40s", "config_path": "a.yaml",
+                        "constraints": {"providers": ["aws"]},
+                        "slo": {"bound_ms": 800},
+                        "workload": {"concurrency": 1, "prompt_tokens": 1,
+                                     "output_tokens": 1}}]}
+    with pytest.raises(DeclarationError, match="without a reason"):
+        parse(raw)
+
+
+def test_a_constraint_with_a_reason_parses_and_is_marked_as_narrowing():
+    raw = {"version": 1, "repo": {"allowed_paths": ["a.yaml"]},
+           "classes": [{"name": "v", "model_id": "o/m", "model": "llama3-8b",
+                        "running_on": "l40s", "config_path": "a.yaml",
+                        "constraints": {"providers": ["aws"],
+                                        "reason": "data residency, EU only"},
+                        "slo": {"bound_ms": 800},
+                        "workload": {"concurrency": 1, "prompt_tokens": 1,
+                                     "output_tokens": 1}}]}
+    d = parse(raw)
+    c = d.constraints["v"]
+    assert c.providers == ("aws",) and c.narrows
+    assert "residency" in c.reason
+
+
+def test_on_demand_only_is_not_a_narrowing():
+    """The default is not a constraint, so it needs no justification."""
+    from berth.declaration import Constraints
+    assert not Constraints().narrows
+    assert Constraints(price_bases=("spot", "on-demand")).narrows
+
+
+def test_an_unknown_price_basis_is_refused():
+    raw = {"version": 1, "repo": {"allowed_paths": ["a.yaml"]},
+           "classes": [{"name": "v", "model_id": "o/m", "model": "llama3-8b",
+                        "running_on": "l40s", "config_path": "a.yaml",
+                        "constraints": {"price_bases": ["preemptible"],
+                                        "reason": "x"},
+                        "slo": {"bound_ms": 800},
+                        "workload": {"concurrency": 1, "prompt_tokens": 1,
+                                     "output_tokens": 1}}]}
+    with pytest.raises(DeclarationError, match="unknown price bases"):
+        parse(raw)

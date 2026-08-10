@@ -26,12 +26,49 @@ from berth.estimate import KV_PRESSURE_WARN, estimate
 from berth.silicon import FLEET
 from berth.workload import MODELS, WorkloadSpec, profile
 
-
 # Cells measured against hardware, with the published error on each. Anything
 # absent is spec-sheet arithmetic and is labelled as such on every decision
 # that rests on it, because a prior has been observed above 40 percent error
 # in this corpus and a buyer moving production traffic deserves to know which
 # kind of number they are looking at.
+# Price bases. A basis is not a discount, it is a different placement with a
+# different risk, and the service level decides whether the cheaper one is
+# admissible at all.
+#
+# Without this the other axes reduce to a sizing problem, and sizing inside one
+# vendor already exists, is free, and takes a service level as input. Price and
+# provider are the pair that put the decision above the vendor boundary.
+PRICE_BASES = {
+    # multiplier on the on-demand rate, and the interruption risk that comes
+    # with it. Multipliers are CONFIG: they are typical published discounts,
+    # not measured, and a real deployment should pass its own.
+    "spot":      {"multiplier": 0.40, "interruption": True,
+                  "note": "evictable at short notice"},
+    "on-demand": {"multiplier": 1.00, "interruption": False, "note": ""},
+    "reserved":  {"multiplier": 0.65, "interruption": False,
+                  "note": "requires a term commitment, so it is a different "
+                          "decision from a placement and cannot be reversed "
+                          "by the agent"},
+}
+
+
+def _basis_admissible(basis: str, slo_bound_ms: float,
+                      interruption_tolerant: bool) -> str | None:
+    """Whether a basis can serve this workload at all.
+
+    A spot instance evicted mid-request does not deliver a late token, it
+    delivers nothing, and a workload that cannot absorb that has no price on
+    spot rather than a low one. This is the same rule as excluding a placement
+    that misses the bound, applied to the price axis.
+    """
+    if PRICE_BASES[basis]["interruption"] and not interruption_tolerant:
+        return ("this workload is declared as unable to absorb an "
+                "interruption, and an evicted request does not deliver a late "
+                "token, it delivers nothing. Spot has no price here rather "
+                "than a low one.")
+    return None
+
+
 def _load_bands():
     """Published error per measured cell, from data rather than from code.
 
@@ -78,6 +115,8 @@ class Candidate:
     kv_pressure: float
     measured: bool
     band: float
+    price_basis: str = "on-demand"
+    price_per_hour: float = 0.0
     excluded_reason: str | None = None
 
 
@@ -124,7 +163,8 @@ class PlacementRecord:
 def decide(*, workload_class: str, model_key: str, incumbent: str,
            slo_metric: str = "p99_ttft_ms", slo_bound_ms: float = 1000.0,
            batch: int = 8, prompt_tokens: int = 512, output_tokens: int = 128,
-           fleet=None, prices=None) -> PlacementRecord:
+           fleet=None, prices=None, bases=("on-demand",),
+           interruption_tolerant: bool = False) -> PlacementRecord:
     """Evaluate every placement in the fleet and record the decision.
 
     A placement missing the latency bound is excluded rather than ranked
@@ -149,17 +189,25 @@ def decide(*, workload_class: str, model_key: str, incumbent: str,
 
     cands, excluded = [], []
     for key, hw in fleet.items():
-        price = prices.get(key, hw.base_price_hr)
+      for basis in bases:
+        if basis not in PRICE_BASES:
+            raise SystemExit(f"unknown price basis {basis!r}")
+        blocked = _basis_admissible(basis, slo_bound_ms, interruption_tolerant)
+        base_price = prices.get(key, hw.base_price_hr)
+        price = base_price * PRICE_BASES[basis]["multiplier"]
         e = estimate(sig, hw, price)
         band = MEASURED_CELLS.get((key, model_key), PRIOR_BAND)
         c = Candidate(
-            silicon=key,
+            silicon=key if basis == "on-demand" else f"{key} ({basis})",
             cost_per_mtok=e.cost_per_mtok if e.feasible else float("inf"),
             ttft_ms=e.ttft_ms, tpot_ms=e.tpot_ms, devices=e.n_devices,
             feasible=bool(e.feasible), kv_pressure=e.kv_pressure,
-            measured=(key, model_key) in MEASURED_CELLS, band=band)
+            measured=(key, model_key) in MEASURED_CELLS, band=band,
+            price_basis=basis, price_per_hour=price)
 
-        if not c.feasible:
+        if blocked:
+            c.excluded_reason = blocked
+        elif not c.feasible:
             c.excluded_reason = "the estimator declares this placement infeasible"
         elif e.ttft_ms > slo_bound_ms:
             c.excluded_reason = (f"first-token latency {e.ttft_ms:.0f} ms "
