@@ -223,6 +223,24 @@ so.
 - **A cofounder.** Ten instrument defects in one week, none caught by review.
   That is the argument, from evidence.
 
+### Open, and known
+
+**The MI300X key-value term.** The estimator uses one effective bandwidth per
+device. A dense batch ladder showed this card holding 3,854 GB/s to batch 4
+and falling to 633 by batch 16, in two discrete steps reproducing across
+output lengths, while both NVIDIA cards stay flat. At batch 16 the estimator
+assumes 3,445 GB/s where the card delivers 633.
+
+That is a biased centre, not a wide interval, and no confidence band corrects
+it. The band has been widened to 0.30 as an interim so a recommendation onto
+this card has to be worth having, and the real fix is a concurrency-dependent
+term. An attempt at one was reverted because it touches the path calibration
+inverts and broke five tests on marginal thresholds; it needs doing carefully
+rather than quickly.
+
+**The ledger and the shadow deployment are not in this document's product
+table yet.** Both shipped after it was last written.
+
 ### Blocking, and on us
 
 - **Docs for eight modules.** `place`, `holdout`, `receipt`, `agent`, `watch`,

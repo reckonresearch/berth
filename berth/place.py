@@ -89,7 +89,26 @@ def _load_bands():
         ("l40s", "llama3-8b"): 0.106,
         ("h100-pcie", "llama3-8b"): 0.042,
         ("h100-sxm", "llama3-8b"): 0.042,
-        ("mi300x", "llama3-8b"): 0.106,
+        # MI300X widened from 0.106 to 0.30 after more measurement, not less.
+        #
+        # A dense batch ladder showed the paged key-value path holding at
+        # 3,854 GB/s to batch 4 and falling to 633 by batch 16, in two
+        # discrete steps at batch 12 and 16 that reproduce across output
+        # lengths. Both NVIDIA cards measured are flat across the same range.
+        #
+        # The consequence is that a single scalar band cannot describe this
+        # card. Its error is small at low concurrency and large at high, and
+        # 0.106 was fitted before the ladder existed. Quoting the low figure
+        # across the whole range would make the estimator most confident
+        # exactly where it is least right, and the first two proposals this
+        # agent generated both moved workloads onto MI300X, one of them at
+        # batch 8 which is where the advantage disappears.
+        #
+        # 0.30 is the honest interim: wide enough that a recommendation onto
+        # this card has to be worth having, narrow enough that the card is not
+        # excluded from consideration. It is a placeholder for a term, and the
+        # staircase is the shape that term should take.
+        ("mi300x", "llama3-8b"): 0.30,
         ("a100-80g", "qwen3-30b-a3b"): 0.376,
     }
 
