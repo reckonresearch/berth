@@ -65,6 +65,12 @@ class WatchedClass:
     output_tokens: int
     config_path: str                     # file in the customer's repo
     repo: str                            # owner/name
+    # Compliant output per hour, million tokens. Declared, not inferred: a
+    # percentage improvement is not money until somebody says how much work
+    # there is, and inferring it would let the reported saving be adjusted by
+    # changing an assumption. Absent means the class appears in the status
+    # page and not in the ledger, which is the honest treatment.
+    mtok_per_hour: float | None = None
 
 
 @dataclass

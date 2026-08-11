@@ -170,3 +170,18 @@ def test_an_unknown_price_basis_is_refused():
                                      "output_tokens": 1}}]}
     with pytest.raises(DeclarationError, match="unknown price bases"):
         parse(raw)
+
+
+def test_volume_is_declared_and_optional():
+    """A percentage is not money until somebody says how much work there is.
+    Absent means the class appears in the status page and not in the ledger,
+    which is the honest treatment rather than a guessed volume."""
+    raw = {"version": 1, "repo": {"allowed_paths": ["a.yaml"]},
+           "classes": [{"name": "v", "model_id": "o/m", "model": "llama3-8b",
+                        "running_on": "l40s", "config_path": "a.yaml",
+                        "slo": {"bound_ms": 800},
+                        "workload": {"concurrency": 1, "prompt_tokens": 1,
+                                     "output_tokens": 1, "mtok_per_hour": 12.5}}]}
+    assert parse(raw).classes[0].mtok_per_hour == 12.5
+    del raw["classes"][0]["workload"]["mtok_per_hour"]
+    assert parse(raw).classes[0].mtok_per_hour is None

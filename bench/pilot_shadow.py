@@ -31,6 +31,8 @@ from pathlib import Path
 
 from berth.agent import AgentRun, AgentState, Outcome, ProposalRecord, run
 from berth.declaration import load_yaml
+from berth.ledger import ClassEconomics as LedgerEcon
+from berth.ledger import build_ledger, daily_report
 from berth.place import decide
 from berth.status import render_status
 from berth.watch import WatchState, build_detector
@@ -138,6 +140,8 @@ def main(argv=None):
                    help="also write .berth/STATUS.md")
     p.add_argument("--summary", action="store_true",
                    help="print the kill-criterion numbers and exit")
+    p.add_argument("--report", action="store_true",
+                   help="print the daily report and write .berth/REPORT.md")
     args = p.parse_args(argv)
 
     if args.summary:
@@ -221,6 +225,38 @@ def main(argv=None):
         print(f"\n  WOULD PROPOSE: {prop.title}")
         for line in prop.config_diff.splitlines():
             print(f"    {line}")
+
+    if args.report:
+        # Volumes come from the declaration, not from the estimator. A
+        # percentage is not money until somebody says how much work there is,
+        # and inferring it would let the reported saving be adjusted by
+        # changing an assumption.
+        econ = []
+        for c in decl.classes:
+            v = getattr(c, "mtok_per_hour", None)
+            d = decisions.get(c.workload_class)
+            if v and d and d.candidates:
+                inc = next((x for x in d.candidates + d.excluded
+                            if x["silicon"] == c.current_silicon), None)
+                if inc:
+                    econ.append(LedgerEcon(c.workload_class, v,
+                                           inc["cost_per_mtok"]))
+        led = build_ledger(ags, econ,
+                           decisions={k: v.to_decision()
+                                      for k, v in decisions.items()},
+                           as_of=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        text = daily_report(ledger=led, classes=decl.classes,
+                            unreachable=ws.unreachable,
+                            triggers=result.triggers_seen,
+                            proposals=len(result.proposals),
+                            sources_polled=len(ws.last_polled),
+                            skipped=skipped)
+        print("\n" + text)
+        Path(".berth/REPORT.md").write_text("```\n" + text + "\n```\n")
+        if not econ:
+            print("\n  No class declares a volume, so the ledger is empty. Add "
+                  "`mtok_per_hour` to the workload block of each class in "
+                  "`.berth/classes.yaml` to see what this has been worth.")
 
     if args.status:
         # Every class needs a decision for the page, even those no trigger

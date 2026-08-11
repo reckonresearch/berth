@@ -174,7 +174,9 @@ def parse(raw: dict, repo: str = "") -> Declaration:
             prompt_tokens=int(_require(wl, "prompt_tokens", f"{where}.workload")),
             output_tokens=int(_require(wl, "output_tokens", f"{where}.workload")),
             config_path=cfg,
-            repo=repo))
+            repo=repo,
+            mtok_per_hour=(float(wl["mtok_per_hour"])
+                           if wl.get("mtok_per_hour") is not None else None)))
 
     if not classes:
         raise DeclarationError(
