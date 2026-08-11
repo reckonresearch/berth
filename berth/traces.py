@@ -98,18 +98,10 @@ class TraceRecord:
 
 def make_true_fleet(prior_fleet: dict[str, SiliconProfile],
                     true_efficiencies: dict[str, tuple[float, float]]) -> dict[str, SiliconProfile]:
-    """Fleet with ground-truth (mfu, bw_eff) substituted, hidden from the fitter.
-
-    Any measured ladder is stripped. A synthetic ground truth is defined
-    entirely by the pair being recovered, and leaving a ladder in the
-    generator would put a third parameter in it that the fitter cannot see and
-    cannot recover, so recovery would fail for a reason unrelated to the
-    estimator.
-    """
+    """Fleet with ground-truth (mfu, bw_eff) substituted — hidden from the fitter."""
     return {
-        name: replace(hw, mfu=true_efficiencies[name][0],
-                      bw_eff=true_efficiencies[name][1], kv_bw_ladder=None)
-        if name in true_efficiencies else replace(hw, kv_bw_ladder=None)
+        name: replace(hw, mfu=true_efficiencies[name][0], bw_eff=true_efficiencies[name][1])
+        if name in true_efficiencies else hw
         for name, hw in prior_fleet.items()
     }
 

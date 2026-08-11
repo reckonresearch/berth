@@ -223,26 +223,9 @@ so.
 - **A cofounder.** Ten instrument defects in one week, none caught by review.
   That is the argument, from evidence.
 
-### Recently closed
+### Open, and known
 
-**The MI300X key-value term.** The estimator used one effective bandwidth per
-device and assumed 3,445 GB/s at batch 16 where the card delivers 633. The
-ladder is now a field on the silicon profile, read by the decode term,
-stripped from synthetic fleets so calibration is unaffected, and absent for
-every device not measured this way. At batch 16 and above the estimator no
-longer recommends this card; at batch 4 and 8, where its advantage is real, it
-still does.
-
-Two brittle tests surfaced on the way and were fixed rather than loosened. The
-calibration fleet is derived from the ground-truth table rather than the live
-registry, so adding silicon cannot move a validation figure. And the bootstrap
-interval bar was set from the estimator's measured precision, 4.9 percent at
-the median and 19.2 at p99 across fifty seeds, rather than the round 15
-percent that was being exceeded by one run in four.
-
-### Superseded
-
-**The MI300X key-value term, as previously recorded.** The estimator uses one effective bandwidth per
+**The MI300X key-value term.** The estimator uses one effective bandwidth per
 device. A dense batch ladder showed this card holding 3,854 GB/s to batch 4
 and falling to 633 by batch 16, in two discrete steps reproducing across
 output lengths, while both NVIDIA cards stay flat. At batch 16 the estimator

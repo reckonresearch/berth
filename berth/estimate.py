@@ -52,36 +52,6 @@ class Estimate:
     p99_ttft_ms: float | None = None    # queueing wait p99 + prefill service
 
 
-def kv_bandwidth_gbs(ladder, batch: int, default_gbs: float) -> float:
-    """Key-value read bandwidth at a given concurrency.
-
-    One effective bandwidth per device is the usual assumption and it is wrong
-    for at least one card in the fleet: weight reads are contiguous and
-    key-value reads are scattered across block tables, and a device can be
-    good at one and poor at the other.
-
-    Where no ladder exists this returns the device's single fitted constant,
-    so the expression below reduces exactly to the previous one and nothing
-    changes for a card that has not been measured this way.
-
-    Linear between measured points, held flat outside them. Not because the
-    underlying behaviour is linear, it is a staircase, but because
-    interpolating a staircase from seven points is inventing detail the
-    measurement does not carry.
-    """
-    if not ladder:
-        return default_gbs
-    pts = sorted(ladder)
-    if batch <= pts[0]:
-        return ladder[pts[0]]
-    if batch >= pts[-1]:
-        return ladder[pts[-1]]
-    for lo, hi in zip(pts, pts[1:], strict=False):
-        if lo <= batch <= hi:
-            return ladder[lo] + (batch - lo) / (hi - lo) * (ladder[hi] - ladder[lo])
-    return default_gbs
-
-
 def replica_layout(sig: ComputeSignature, hw: SiliconProfile) -> tuple[int, float]:
     """(n_devices, tp_scale) for this signature on this silicon.
 
@@ -123,14 +93,7 @@ def estimate(sig: ComputeSignature, hw: SiliconProfile, price_hr: float) -> Esti
     # --- Decode (steady state) ---
     active_weight_bytes = m.active_params_b * 1e9 * m.bytes_per_param
     compute_t = sig.batch * sig.decode_flops_per_token / eff_flops
-    # Weights and key-value cache move on different access patterns, and on at
-    # least one card at very different rates. Where a ladder exists the two
-    # terms separate; everywhere else both use the same constant and this is
-    # algebraically the previous expression.
-    kv_gbs = kv_bandwidth_gbs(getattr(hw, "kv_bw_ladder", None), sig.batch,
-                              hw.hbm_bw_tbs * 1e3 * hw.bw_eff)
-    eff_kv_bw = n_dev * kv_gbs * 1e9 * tp_scale
-    memory_t = active_weight_bytes / eff_bw + kv_total / eff_kv_bw
+    memory_t = (active_weight_bytes + kv_total) / eff_bw
     step_t = max(compute_t, memory_t)
     bound = "compute" if compute_t >= memory_t else "memory"
 

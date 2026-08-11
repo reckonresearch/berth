@@ -39,7 +39,7 @@ CALIBRATION_FLEET = tuple(TRUE_EFF)
 
 
 def calibrated():
-    subset = {k: FLEET[k] for k in TRUE_EFF}
+    subset = {k: FLEET[k] for k in CALIBRATION_FLEET}
     true_fleet = make_true_fleet(subset, TRUE_EFF)
     traces = generate_traces(true_fleet, n_per_silicon=60, noise_sigma=0.05, seed=7)
     fleet, report = calibrate(subset, traces)
@@ -91,17 +91,5 @@ def test_bootstrap_ci_covers_truth_and_is_tight(calibrated):
         (mfu_lo, mfu_hi), (bw_lo, bw_hi) = report.ci95[name]
         assert mfu_lo <= true_mfu * 1.02 and mfu_hi >= true_mfu * 0.98, name
         assert bw_lo <= true_bw * 1.02 and bw_hi >= true_bw * 0.98, name
-        # Bar set from the estimator's measured precision, not a round number.
-        # Across 20 seeds, 6 silicon and both parameters at n=60 with 5 percent
-        # lognormal noise, the bootstrap width is 4.9 percent at the median,
-        # 11.3 at p90 and 19.2 at p99. The previous 15 percent bar was exceeded
-        # by 2.5 percent of draws, which with twelve assertions per run is
-        # roughly a one in four chance of a spurious failure. It passed by luck
-        # of the seed and failed the first time the fleet subset changed which
-        # random numbers each silicon drew.
-        #
-        # The purpose of the check is that the interval is informative rather
-        # than vacuous. A 25 percent interval on these parameters is still
-        # informative; a vacuous one would be several times wider.
-        assert (mfu_hi - mfu_lo) / true_mfu < 0.25
-        assert (bw_hi - bw_lo) / true_bw < 0.25
+        assert (mfu_hi - mfu_lo) / true_mfu < 0.15   # informative, not vacuous
+        assert (bw_hi - bw_lo) / true_bw < 0.15

@@ -22,15 +22,6 @@ class SiliconProfile:
     base_price_hr: float        # on-demand $/device-hour (reference price)
     mfu: float = 0.50           # achievable fraction of peak compute
     bw_eff: float = 0.75        # achievable fraction of peak bandwidth
-    # Key-value read bandwidth by concurrency, GB/s, for a device measured to
-    # have two access patterns rather than one. Absent everywhere else, and
-    # absent means the single bw_eff above describes both paths.
-    #
-    # A field rather than a table inside the estimator, because a synthetic
-    # fleet built for calibration must be able to not have one: an override
-    # the fitter cannot see makes it recover a constant the model no longer
-    # uses.
-    kv_bw_ladder: dict | None = None
     prefill_overhead_ms: float = 0.0  # fixed per-request latency (kernel
                                 # launch + server scheduling); measured on
                                 # real hardware, ~75-145ms on L40S/vLLM. Not
@@ -78,17 +69,7 @@ FLEET: dict[str, SiliconProfile] = {
         SiliconProfile("b200",      "gpu", peak_tflops=2250, hbm_bw_tbs=8.0,  mem_gb=180, base_price_hr=4.99,
                        fp8_tflops=4500, fp4_tflops=9000),
         SiliconProfile("mi300x",    "gpu", peak_tflops=1307, hbm_bw_tbs=5.30, mem_gb=192, base_price_hr=2.80,
-                       mfu=0.35, bw_eff=0.65, fp8_tflops=2615,
-                       # Measured on a dense batch ladder. The paged key-value
-                       # path holds to batch 4 and falls sixfold by batch 16,
-                       # in two discrete steps at 12 and 16 that reproduce
-                       # across output lengths. Both NVIDIA cards measured are
-                       # flat across the same range, and at batch 1 this card
-                       # delivers 92 percent of its own microbenchmark, so the
-                       # memory system is fine and the kernel is not.
-                       kv_bw_ladder={1: 3393.0, 4: 3854.0, 8: 1950.0,
-                                     12: 872.0, 16: 633.0, 20: 366.0,
-                                     24: 479.0}),  # software maturity discount, this gap IS the placement premium source
+                       mfu=0.35, bw_eff=0.65, fp8_tflops=2615),  # CDNA3 fp8 ~2x bf16. mfu gap = software-maturity premium source
         SiliconProfile("a100-80g",  "gpu", peak_tflops=312,  hbm_bw_tbs=2.00, mem_gb=80,  base_price_hr=1.40),  # Ampere: no native fp8 -> fp8_tflops None
         SiliconProfile("l40s",      "gpu", peak_tflops=362,  hbm_bw_tbs=0.864, mem_gb=48, base_price_hr=0.95,
                        prefill_overhead_ms=0.0, fp8_tflops=724),  # floor fit per run from batch=1 traces; Ada fp8 ~2x
