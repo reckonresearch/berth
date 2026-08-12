@@ -9,3 +9,8 @@ build/
 .berth/pilot-state.json
 .berth/pilot-runs.jsonl
 .berth/pilot.log
+
+# Written by the agent on every pass. The declaration is committed as a
+# worked example; what it has seen is not.
+.berth/STATUS.md
+.berth/REPORT.md

@@ -4,10 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "berth-placement"
-version = "0.5.0"
-description = "Inference placement primitives: profile, estimate, place and migrate LLM serving across GPUs and providers. Auditable roofline, trace calibration, tail-aware sizing."
+version = "0.6.0"
+description = "Adaptive placement infrastructure for AI inference: predict what a workload costs on a given accelerator before you rent it."
 readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["inference", "llm", "gpu", "placement", "performance-modeling",
+            "vllm", "sglang", "benchmarking", "mlops", "cost-optimization"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+  "Topic :: System :: Benchmark",
+]
 license = "Apache-2.0"
 authors = [{ name = "Reckon Research" }]
 dependencies = []  # stdlib only, by design: auditability of the core model
@@ -31,6 +43,7 @@ include = ["berth*", "bench*"]
 testpaths = ["tests"]
 
 [tool.ruff]
+extend-exclude = ["tutorials", "data", ".berth"]
 line-length = 100
 target-version = "py311"
 

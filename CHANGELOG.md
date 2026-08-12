@@ -1,3 +1,60 @@
+## v0.6.0
+
+The control plane. berth predicted; it now decides, watches, and proves.
+
+**Added**
+
+- `berth.place`, the decision record: what is recommended, what it beat, by
+  how much, and whether that margin clears the uncertainty plus the cost of
+  moving. A placement missing the bound is excluded rather than ranked
+  cheaply, because its cost per compliant token is undefined rather than high.
+- `berth.holdout`, the reference implementation of the Placement Holdout
+  Protocol. Assignment, declaration, period bookkeeping, four stationarity
+  checks, warm-up detection, circuit breaker.
+- `berth.receipt`, two-leg settlement into a conforming record. Holdout cost
+  is its own line, a negative period carries forward, and a tripped breaker
+  voids rather than counting as a loss.
+- `berth.agent`, the loop: watch, detect, re-estimate, propose. State stops it
+  repeating a proposal or re-asking after a rejection.
+- `berth.watch`, four sources: model registries by commit, serving-stack
+  releases, provider prices with an epsilon, corpus additions. An unreachable
+  source is recorded rather than swallowed.
+- `berth.github`, opens the pull request and refuses everything else. Cannot
+  merge, cannot write to a default branch, cannot touch an undeclared path.
+- `berth.declaration`, `.berth/classes.yaml` in the customer's own repository.
+  Declared axes and chosen axes are separated, and narrowing the search
+  requires a reason.
+- `berth.status`, `.berth/STATUS.md`, every class in one file.
+- `berth.ledger`, realized, available and foregone savings, never summed.
+- `berth.versus`, self-host or API on one axis.
+- `berth.quantities`, typed ceilings that make two unit defects impossible at
+  the call site.
+- Price basis as a search dimension: spot, on-demand and reserved as distinct
+  candidates with distinct admissibility.
+- Device power in the trace schema, at the device boundary only.
+- CLI: `place`, `pilot`, `versus`, `holdout`.
+
+**Changed**
+
+- Key-value bandwidth varies with concurrency where a device has been measured
+  to have two access patterns. One card holds 3,854 GB/s to batch 4 and falls
+  to 633 by batch 16 while both NVIDIA cards measured stay flat. The estimator
+  previously used one constant and was five times optimistic at batch 16.
+- `MEASURED` derives from the corpus rather than being frozen at the two P0
+  cards.
+- The audit refuses a file only on physical impossibility. Everything else
+  prints and passes.
+- `bench/holdout.py` is now `bench/crossval.py`. It cross-validates the
+  estimator; `berth.holdout` is the commercial protocol, and one name for two
+  unrelated things was a collision waiting to happen.
+
+**Fixed**
+
+- Eleven instrument defects, registered in `DEFECTS.md` with the mechanism,
+  how each was caught, and the test that fails if it returns. Four let bad
+  data through. Seven rejected good data, which is the more dangerous
+  direction because a false positive is silent.
+
 ## v0.5.0
 
 **Trace provenance.** `TraceRecord.source` is "measured" or "mock", and
@@ -54,7 +111,7 @@ still `berth`. License declared as an SPDX string, `project.urls` added.
 - feat: bootstrap 95% CIs on calibrated efficiency factors
 - feat: harness records server-reported prompt tokens (usage), not the
   request-side heuristic
-- feat: bench/microbench.py — GEMM + bandwidth ceiling probes for the
+- feat: bench/microbench.py , GEMM + bandwidth ceiling probes for the
   fitted <= microbenched <= peak physics gate
 - chore: ruff lint clean; ruff + pyright in CI
 

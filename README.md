@@ -2,8 +2,20 @@
 
 A [Reckon Research](https://www.reckonresearch.com/berth) project. Docs: [docs.reckonresearch.com](https://docs.reckonresearch.com).
 
-[![ci](https://github.com/ReckonResearch/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/ReckonResearch/berth/actions)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+Predict what a workload costs and how fast it runs on a given accelerator,
+before you rent it.
+
+```bash
+pip install berth-placement
+berth place --workload-class voice --model llama3-8b --incumbent h100-pcie --slo-ms 800
+```
+
+[Docs](https://docs.reckonresearch.com) ·
+[The Placement Index](https://reckonresearch.com/index/) ·
+[Defect register](https://github.com/reckonresearch/berth/blob/main/DEFECTS.md)
+
+[![ci](https://github.com/reckonresearch/berth/actions/workflows/ci.yml/badge.svg)](https://github.com/reckonresearch/berth/actions)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/reckonresearch/berth/blob/main/LICENSE)
 
 **Where should this workload run?** berth answers that with four primitives —
 `profile / estimate / place / migrate` — over an auditable roofline model,
@@ -119,8 +131,8 @@ both hard and unserved.
 
 ## The four primitives
 
-```python
-from berth import MODELS, PlacementClient, PlacementPolicy, SimBackend, WorkloadSpec, min_cost
+[`DEFECTS.md`](https://github.com/reckonresearch/berth/blob/main/DEFECTS.md) is the register: eleven instrument failures, what
+caused each, how it was caught, and the test that fails if it returns.
 
 client = PlacementClient(SimBackend(seed=42))
 
