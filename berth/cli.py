@@ -13,6 +13,7 @@ from berth.estimate import estimate
 from berth.silicon import FLEET
 from berth.workload import MODELS, WorkloadSpec, profile
 
+
 # Silicon validated against real hardware traces. Everything else is a
 # spec-sheet prior, and the CLI says so on every line it prints.
 #
