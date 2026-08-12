@@ -13,9 +13,26 @@ from berth.estimate import estimate
 from berth.silicon import FLEET
 from berth.workload import MODELS, WorkloadSpec, profile
 
-# Silicon validated against real hardware traces (P0). Everything else is a
+# Silicon validated against real hardware traces. Everything else is a
 # spec-sheet prior, and the CLI says so on every line it prints.
-MEASURED = {"l40s", "h100-pcie"}
+#
+# Derived from the corpus rather than typed. This was frozen at the two P0
+# cards and never updated as cells landed, so the CLI, the public Index, and
+# every artifact downstream of them understated the corpus by three
+# accelerators for weeks. A card whose first cross-vendor measurement is
+# labelled spec-sheet arithmetic is the same error as an unmeasured card
+# labelled measured, in the direction that costs credibility rather than
+# accuracy.
+#
+# A card is MEASURED when at least one cell exists for it. It does not mean
+# every model on it has been measured, and the band on a given placement says
+# which.
+def _measured_silicon():
+    from berth.place import MEASURED_CELLS
+    return {silicon for silicon, _model in MEASURED_CELLS}
+
+
+MEASURED = _measured_silicon()
 
 
 # Column layout is shared between the header and the rows so they stay aligned,
