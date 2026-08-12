@@ -267,8 +267,15 @@ def test_migrate_forces_move_on_constraint_violation():
                              constraints=(lambda e: e.cost_per_mtok < 3.2,),
                              min_improvement=0.15)
     h = client.place(sig_for(), policy)
-    assert h.silicon == "mi300x"
-    backend.shock("mi300x", 1.6)          # cost ~3.30 > 3.2; a100 ~3.06 < 3.2
+    # Shock whatever the estimator actually chose. Naming the winner here tied
+    # the test to what the physics said the day it was written: when the
+    # key-value ladder landed, the cheapest placement at this concurrency
+    # changed and the test failed for a reason that had nothing to do with
+    # migration. The property under test is that a constraint violation
+    # overrides hysteresis, not which card wins.
+    incumbent = h.silicon
+    assert h.estimate.cost_per_mtok < 3.2
+    backend.shock(incumbent, 1.6)
     h2 = client.migrate(h)
-    assert h2.silicon != "mi300x"
+    assert h2.silicon != incumbent
     assert h2.estimate.cost_per_mtok < 3.2

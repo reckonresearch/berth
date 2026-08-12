@@ -127,7 +127,19 @@ def generate_traces(true_fleet: dict[str, SiliconProfile],
     (None), per-workload-class truth (inspect sig), and software-stack drift
     (inspect t). Ground-truth generation and hypothesis structure stay
     decoupled from the fitter under test.
+
+    Any measured key-value ladder on a profile is stripped for the duration.
+    A ladder is a second mechanism varying the same quantity the caller is
+    declaring, so leaving it in place means the fitter recovers the product of
+    two truths and fails against either. This bit twice: once when a synthetic
+    fleet inherited the ladder through make_true_fleet, and once when a test
+    passed the live FLEET straight in and bypassed that fix entirely. Doing it
+    here is the version no caller can miss.
     """
+    from dataclasses import replace as _replace
+    true_fleet = {k: (_replace(v, kv_bw_ladder=None)
+                      if getattr(v, "kv_bw_ladder", None) else v)
+                  for k, v in true_fleet.items()}
     rng = random.Random(seed)
     traces: list[TraceRecord] = []
     model_names = list(models)
