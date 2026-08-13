@@ -14,3 +14,8 @@ build/
 # worked example; what it has seen is not.
 .berth/STATUS.md
 .berth/REPORT.md
+
+# Internal. Strategy, pricing and roadmap.
+STATE.md
+docs/BUSINESS_MODEL.md
+docs/ROUTER_ROADMAP.md
