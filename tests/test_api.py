@@ -137,13 +137,13 @@ def test_pilot_reads_a_yaml_declaration(tmp_path):
     d = tmp_path / "classes.yaml"
     d.write_text("""version: 1
 repo:
-  allowed_paths: [d.yaml]
+  allowed_paths: [deploy/v.yaml]
 classes:
   - name: v
     model_id: o/m
     model: llama3-8b
     running_on: h100-pcie
-    config_path: d.yaml
+    config_path: deploy/v.yaml
     slo: {metric: p99_ttft_ms, bound_ms: 800}
     workload: {concurrency: 8, prompt_tokens: 512, output_tokens: 128}
 """)
@@ -162,13 +162,13 @@ def test_live_without_a_token_refuses_rather_than_doing_nothing(tmp_path):
     d = tmp_path / "c.yaml"
     d.write_text("""version: 1
 repo:
-  allowed_paths: [d.yaml]
+  allowed_paths: [deploy/v.yaml]
 classes:
   - name: v
     model_id: o/m
     model: llama3-8b
     running_on: h100-pcie
-    config_path: d.yaml
+    config_path: deploy/v.yaml
     slo: {metric: p99_ttft_ms, bound_ms: 800}
     workload: {concurrency: 8, prompt_tokens: 512, output_tokens: 128}
 """)
