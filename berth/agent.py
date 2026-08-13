@@ -166,6 +166,8 @@ class AgentRun:
     proposals: list[Proposal] = field(default_factory=list)
     suppressed: list[tuple[str, str]] = field(default_factory=list)
     shadow: bool = False
+    executions: list = field(default_factory=list)
+    moved: int = 0
 
     @property
     def proposal_rate(self) -> float:
@@ -410,13 +412,24 @@ def build_proposal(watched: WatchedClass, trigger: Trigger, decision: Decision,
 def run(watched_classes, resolve_decision, detect_triggers,
         *, traces_url="https://docs.reckonresearch.com/validation-p0/",
         render_diff=None, state: AgentState | None = None,
-        shadow: bool = False, now: datetime | None = None) -> AgentRun:
+        shadow: bool = False, now: datetime | None = None,
+        deliver=None, autonomy=None, exec_state=None) -> AgentRun:
     """One pass over every class the agent is holding.
 
     `resolve_decision(watched, trigger) -> Decision` and
     `detect_triggers(watched) -> list[Trigger]` are injected, so the loop can
     be tested without a registry, a price feed, or a repository, and so a
     customer can run it against their own sources.
+
+    `deliver(proposal, policy) -> ExecutionRecord` is the delivery adapter.
+    Absent, or in shadow, the loop decides and records and touches nothing.
+    Present, it is what opens the pull request and, where the declared policy
+    permits, merges it.
+
+    The adapter is injected rather than imported for the same reason the
+    other two are: the decision engine should not know whether the change
+    lands in a repository, through an API, or nowhere at all. That separation
+    is what makes a second delivery target a new adapter rather than a fork.
     """
     result = AgentRun()
     seen_this_run = set()
@@ -445,6 +458,18 @@ def run(watched_classes, resolve_decision, detect_triggers,
                                       traces_url=traces_url)
             seen_this_run.add(key)
             result.proposals.append(proposal)
+
+            # Delivery, where an adapter is present and this is not shadow.
+            # A proposal that is never delivered is a decision nobody can act
+            # on, and the loop existed in exactly that state until this was
+            # wired: execute was written, tested, and reachable from nothing.
+            if deliver is not None and not shadow:
+                policy = (autonomy or {}).get(w.workload_class)
+                rec = deliver(proposal, policy)
+                if rec is not None:
+                    result.executions.append(rec)
+                    if rec.executed:
+                        result.moved += 1
             if state is not None:
                 # Shadow mode records without opening anything, which is how
                 # the agent earns the right to be trusted with a pull request:

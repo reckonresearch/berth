@@ -29,6 +29,12 @@ from berth.workload import MODELS, WorkloadSpec, profile
 # every model on it has been measured, and the band on a given placement says
 # which.
 def _measured_silicon():
+    """Derived from the corpus rather than typed.
+
+    This was frozen at the two P0 cards and never updated as cells landed, so
+    the CLI, the public Index, and every artifact downstream understated the
+    corpus by three accelerators for weeks.
+    """
     from berth.place import MEASURED_CELLS
     return {silicon for silicon, _model in MEASURED_CELLS}
 

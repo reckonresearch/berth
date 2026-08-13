@@ -1,3 +1,87 @@
+## v0.8.0
+
+The placement API, and a delivery path that was written and unreachable.
+
+**Added**
+
+- `berth.api`, placement decisions over HTTP. pilot delivers through a
+  repository, which reaches every team that deploys from git and no team that
+  does not. An orchestrator, a CI pipeline or a scheduler cannot read a pull
+  request; this is the same decision as JSON.
+- `POST /v1/place` returns the decision plus `act`, because a caller acting on
+  this automatically has no chance to ask a follow-up question. Every figure
+  carries whether it rests on a measurement or a specification sheet.
+- `POST /v1/versus`, self-host or API, taking the rate cards from the caller.
+  A price list we maintained would be stale the week after it shipped, and a
+  wrong price is worse than none because it looks authoritative.
+- `GET /v1/silicon`, the fleet and which cells are measured.
+- A stated refusal on `/v1/completions`, `/v1/chat/completions` and
+  `/v1/generate`. The refusal is a route rather than an absence, so a caller
+  expecting a proxy gets the reason instead of a 404 they might read as a
+  missing feature. berth returns placement decisions and never sits in the
+  request path: a party that carries traffic cannot credibly rank the
+  placements it carries traffic for.
+- `berth-api` console script. Binds to loopback by default, because a
+  placement API is an internal service and binding to all interfaces by
+  default is how something ends up on the public internet because nobody
+  passed a flag.
+
+**Fixed**
+
+- The execution layer was written, tested and reachable from nothing. Neither
+  the agent loop nor the CLI imported it, so pilot proposed and never executed
+  in any path a customer would run. Delivery is now injected into `run()` the
+  same way the decision resolver and the trigger detector are, which also
+  means a second delivery target is a new adapter rather than a fork.
+- `MEASURED` in this build was still the frozen P0 pair.
+
+**Notes**
+
+- No web framework. The standard library only, because a placement decision
+  should not oblige anyone to adopt a web stack, and because this has to run
+  in a customer's environment as easily as in ours. Roughly two hundred lines
+  against a dependency that would be forty thousand.
+
+## v0.7.0
+
+pilot executes. A placement system that only proposes is a recommendation
+engine with extra steps: if every change waits on someone noticing a pull
+request, the loop is as slow as the human in it, and the argument for adaptive
+placement is that the answer changes faster than anyone checks.
+
+**Added**
+
+- `berth.execute`, the execution layer. Authority is declared once, in advance,
+  in the customer's own repository, and that commit is the authorization. The
+  human decision moves from approving a change to approving a class of change
+  under stated conditions, which is the decision a human is good at.
+- Four autonomy levels per class: `frozen`, `propose` (the default),
+  `window`, `execute`.
+- Six guardrails, every one of which can only refuse. Blast radius so one bad
+  estimate cannot move a fleet. A rate limit so a class cannot oscillate.
+  Blackout dates, because a freeze is real and a system that ignores one gets
+  uninstalled. A minimum margin to act unattended, higher than the bar for
+  proposing. A measurement requirement, so an unmeasured placement is never
+  executed by default regardless of how good it looks. And automatic rollback.
+- `GitHubClient.merge_proposal`, which merges a pull request pilot opened under
+  a stated policy and writes the reason into the merge commit. A change that
+  landed unattended says on its face which rule allowed it, and reverting it is
+  reverting a commit.
+- `sounding` and `pilot` as their own console commands. Reaching the agent
+  through `berth pilot` read as the estimator's subcommand, which is the wrong
+  shape for a separate product. The subcommands still work.
+
+**Changed**
+
+- `GitHubClient.merge` still refuses, now because it has no authorization
+  attached rather than because merging is forbidden. Execution goes through
+  `merge_proposal`, which requires the policy that permitted it.
+- Rollback outranks savings. A move that breaches the service level reverts
+  regardless of what it saved, because a placement that misses its bound is
+  not a cheap placement.
+- The kill switch is deleting `.berth/classes.yaml`. An autonomy system whose
+  off switch requires contacting the vendor is not one anyone should install.
+
 ## v0.6.0
 
 The control plane. berth predicted; it now decides, watches, and proves.
