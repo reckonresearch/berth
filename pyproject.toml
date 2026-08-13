@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "berth-placement"
-version = "0.6.0"
+version = "0.8.0"
 description = "Adaptive placement infrastructure for AI inference: predict what a workload costs on a given accelerator before you rent it."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,7 +30,15 @@ Repository = "https://github.com/ReckonResearch/berth"
 Changelog = "https://github.com/ReckonResearch/berth/blob/main/CHANGELOG.md"
 
 [project.scripts]
+# Three products, three commands. berth is the estimator, sounding the
+# harness, pilot the agent. Reaching the agent through `berth pilot` reads as
+# the estimator's subcommand, which is the wrong shape for a separate product.
+# The subcommands still work, so nothing breaks for anyone who scripted
+# against them.
 berth = "berth.cli:main"
+sounding = "berth.sounding_cli:main"
+pilot = "berth.pilot_cli:main"
+berth-api = "berth.api:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

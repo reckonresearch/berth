@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from dataclasses import dataclass as _dc
 
 from berth.agent import WatchedClass
+from berth.execute import Autonomy, AutonomyPolicy
 from berth.github import RepoTarget
 
 CONFIG_PATH = ".berth/classes.yaml"
@@ -95,6 +96,10 @@ class Declaration:
     allowed_paths: tuple[str, ...]
     classes: list[WatchedClass] = field(default_factory=list)
     constraints: dict[str, Constraints] = field(default_factory=dict)
+    # Autonomy per class. Absent means propose, which is the conservative
+    # default: a class nobody wrote a policy for behaves like one that says
+    # ask first.
+    autonomy: dict[str, AutonomyPolicy] = field(default_factory=dict)
     default_branch: str = "main"
 
     def repo_target(self, owner: str, name: str) -> RepoTarget:
@@ -212,8 +217,39 @@ def parse(raw: dict, repo: str = "") -> Declaration:
                 f"constraint costs money and the reason is what lets anyone "
                 f"tell later whether it is still worth paying.")
 
+    auto = {}
+    for c in raw.get("classes") or []:
+        blk = c.get("autonomy")
+        if not blk:
+            continue
+        lvl = blk.get("level", "propose")
+        if lvl not in [a.value for a in Autonomy]:
+            raise DeclarationError(
+                f"class {c['name']!r} declares autonomy level {lvl!r}. Valid "
+                f"levels are {[a.value for a in Autonomy]}.")
+        if lvl == "window" and not blk.get("windows"):
+            raise DeclarationError(
+                f"class {c['name']!r} is set to window autonomy with no "
+                f"windows declared, which permits nothing. State the windows "
+                f"or use propose.")
+        if blk.get("allow_unmeasured") and not blk.get("reason"):
+            raise DeclarationError(
+                f"class {c['name']!r} allows executing onto unmeasured "
+                f"silicon without a reason. A spec-sheet prior has been "
+                f"observed above 40 percent error, so this needs saying out "
+                f"loud.")
+        auto[c["name"]] = AutonomyPolicy(
+            level=Autonomy(lvl),
+            max_moves_per_pass=int(blk.get("max_moves_per_pass", 1)),
+            min_hours_between_moves=int(blk.get("min_hours_between_moves", 168)),
+            min_margin_to_execute=float(blk.get("min_margin_to_execute", 0.25)),
+            allow_unmeasured=bool(blk.get("allow_unmeasured", False)),
+            windows=tuple(tuple(w) for w in (blk.get("windows") or ())),
+            blackout_dates=tuple(blk.get("blackout_dates") or ()),
+            rollback_after_breaches=int(blk.get("rollback_after_breaches", 1)))
+
     return Declaration(version=version, allowed_paths=allowed,
-                       classes=classes, constraints=cons,
+                       classes=classes, constraints=cons, autonomy=auto,
                        default_branch=repo_block.get("default_branch", "main"))
 
 

@@ -7,7 +7,7 @@ Published because a measurement tool that has never been caught lying has not
 been used hard enough, and because the failures are more useful to anyone else
 measuring inference than the results are.
 
-**Four let bad data through. Six rejected good data.** An earlier version of
+**Four let bad data through. Seven rejected good data. Three were correct code that nothing could reach.** An earlier version of
 this document had those the wrong way round, which understated the more
 serious of the two.
 
@@ -336,6 +336,41 @@ it. The old bar was a flat 1.5x, which called a clean file contaminated at
 still exits 1 on a 23x overshoot. The MI300X cross-vendor finding, the clean
 SGLang file, the fp8 cell, and a file audited against the wrong denominator
 all now exit 0, with the wrong denominator named as the likely cause.
+
+---
+
+## 12, 13, 14. A feature nothing could reach
+
+**Mechanism:** integration. **Direction:** neither. The code was correct and
+unreachable.
+
+Three in one day, all the same shape.
+
+`berth/execute.py` was written and tested with nineteen tests. Nothing
+imported it. The agent loop did not call it, the CLI did not expose it, and
+the shadow runner did not know it existed. pilot proposed and never executed
+in any path a customer would run, and this was reported as shipped.
+
+`cmd_pilot` read the declaration with `json.load` for a file that is YAML. The
+command every customer would type to use pilot raised a JSONDecodeError before
+doing anything. The declaration parser existed and the CLI never called it.
+
+`--live` decided and changed nothing when no credential was present. Silently.
+A user would have believed it ran.
+
+**None of the three was caught by 271 passing tests**, because no test invoked
+the command. Every test constructed objects and called functions directly,
+which is the right way to test a unit and no way at all to test that a product
+works.
+
+**Rule: a feature is not shipped until the command a customer types has been
+typed.** Unit tests prove a function is correct. They cannot prove anything is
+reachable, and reachability is what a customer experiences as the product
+existing.
+
+**Pinned by:** `test_pilot_reads_a_yaml_declaration`,
+`test_live_without_a_token_refuses_rather_than_doing_nothing`, and the
+`package` job in CI, which installs the wheel and runs the binary.
 
 ---
 

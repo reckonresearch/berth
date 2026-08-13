@@ -165,11 +165,31 @@ def test_committing_to_the_default_branch_is_refused():
         c.put_file(_repo(), "deploy/voice.yaml", "x", branch="main", message="m")
 
 
-def test_merging_is_refused_explicitly():
-    """Present so the refusal is explicit rather than an absence. The agent
-    proposes and the customer disposes."""
-    with pytest.raises(RefusedByPolicy, match="does not merge"):
+def test_an_unqualified_merge_is_refused():
+    """merge() has no authorization attached. Execution goes through
+    merge_proposal, which requires the policy that permitted it, so the reason
+    a change landed unattended is recorded with the change."""
+    with pytest.raises(RefusedByPolicy, match="no authorization"):
         _client([]).merge()
+
+
+def test_merge_proposal_requires_a_policy_reason():
+    """A merge without a stated reason is a merge nobody authorised."""
+    with pytest.raises(RefusedByPolicy, match="nobody authorised"):
+        _client([]).merge_proposal(_repo(), {"number": 1}, policy_reason="")
+
+
+def test_merge_proposal_writes_the_reason_into_the_commit():
+    """A change that landed unattended should say on its face which rule
+    allowed it, and be revertible like any other commit."""
+    log = []
+    c = _client(log)
+    c.merge_proposal(_repo(), {"number": 42, "title": "move voice to mi300x"},
+                     policy_reason="31% margin, measured, inside policy")
+    method, url, body = log[-1]
+    assert method == "PUT" and url.endswith("/pulls/42/merge")
+    assert "31% margin" in body["commit_message"]
+    assert "Revert this commit" in body["commit_message"]
 
 
 def test_a_stale_diff_is_refused_rather_than_guessed():

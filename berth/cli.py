@@ -29,6 +29,12 @@ from berth.workload import MODELS, WorkloadSpec, profile
 # every model on it has been measured, and the band on a given placement says
 # which.
 def _measured_silicon():
+    """Derived from the corpus rather than typed.
+
+    This was frozen at the two P0 cards and never updated as cells landed, so
+    the CLI, the public Index, and every artifact downstream understated the
+    corpus by three accelerators for weeks.
+    """
     from berth.place import MEASURED_CELLS
     return {silicon for silicon, _model in MEASURED_CELLS}
 
@@ -208,64 +214,128 @@ def cmd_place(args):
 
 
 def cmd_pilot(args):
-    """Run one pass of the placement agent against a config file of classes.
+    """Run one pass of the agent against a declaration.
 
-    Shadow by default. The agent proposes changes to production
-    configuration, and the correct first posture is to read what it would
-    have said for a while before letting it say anything.
+    Shadow by default. pilot changes production configuration, and the correct
+    first posture is to read what it would have said for a while before
+    letting it say anything.
+
+    This read the declaration with json.load for a file that is YAML, so the
+    command every customer would run to use pilot crashed on its first line.
+    The declaration parser existed and the CLI never called it.
     """
     import json as _json
+    from pathlib import Path
 
-    from berth.agent import AgentState, WatchedClass, run
+    from berth.agent import AgentState, run
+    from berth.declaration import load_yaml
     from berth.place import decide
     from berth.watch import WatchState, build_detector
 
-    with open(args.classes) as f:
-        raw = _json.load(f)
-    classes = [WatchedClass(**c) for c in raw]
+    path = Path(args.classes)
+    if not path.exists():
+        raise SystemExit(f"no declaration at {path}")
+    from berth.declaration import DeclarationError
+    try:
+        decl = load_yaml(path.read_text(), repo=args.repo or "")
+    except DeclarationError as e:
+        # The parser's messages are precise and name the class and the field.
+        # Letting them arrive as a traceback buries a good error inside a
+        # stack the reader has to parse to find it.
+        raise SystemExit(f"{path}: {e}") from None
 
-    wstate = WatchState()
-    if args.state:
-        try:
-            with open(args.state) as f:
-                saved = _json.load(f)
-            wstate.model_versions = saved.get("model_versions", {})
-            wstate.prices = saved.get("prices", {})
-        except FileNotFoundError:
-            print(f"no state at {args.state}, first run records rather than "
-                  f"fires. Nothing is proposed until a source is seen to move.")
+    ws = WatchState()
+    ags = AgentState()
+    if args.state and Path(args.state).exists():
+        saved = _json.loads(Path(args.state).read_text())
+        ws.model_versions = saved.get("model_versions", {})
+        ws.stack_versions = saved.get("stack_versions", {})
+        ws.prices = saved.get("prices", {})
+        ws.corpus_cells = {tuple(c) for c in saved.get("corpus_cells", [])}
+    elif args.state:
+        print(f"no state at {args.state}. The first pass records what every "
+              f"source looks like and fires nothing, because we do not yet "
+              f"know whether anything changed.")
 
-    detect = build_detector(wstate)
-    detect.poll([c.model_id for c in classes])
+    detect = build_detector(ws, stack_repos=["vllm-project/vllm",
+                                             "sgl-project/sglang"])
+    detect.poll([c.model_id for c in decl.classes])
+
+    decisions, skipped = {}, []
 
     def resolve(w, _trig):
-        return decide(workload_class=w.workload_class, model_key=w.model_key,
-                      incumbent=w.current_silicon, slo_bound_ms=w.slo_bound_ms,
-                      batch=w.batch, prompt_tokens=w.prompt_tokens,
-                      output_tokens=w.output_tokens).to_decision()
+        try:
+            rec = decide(workload_class=w.workload_class,
+                         model_key=w.model_key, incumbent=w.current_silicon,
+                         slo_bound_ms=w.slo_bound_ms, batch=w.batch,
+                         prompt_tokens=w.prompt_tokens,
+                         output_tokens=w.output_tokens)
+        except SystemExit as e:
+            skipped.append((w.workload_class, str(e)))
+            from berth.agent import Decision
+            return Decision(w.current_silicon, w.current_silicon, 0.0, 0.0,
+                            1.0, 0, 0, True)
+        decisions[w.workload_class] = rec
+        return rec.to_decision()
 
-    astate = AgentState()
-    result = run(classes, resolve, detect, state=astate,
-                 shadow=not args.live)
+    # Delivery, only when --live and a token is present. Without both, the
+    # pass decides and records and touches nothing, which is the same shape
+    # as a dry run in any tool that changes infrastructure.
+    deliver = None
+    if args.live:
+        import os
+        token = os.environ.get("GITHUB_TOKEN")
+        if not token:
+            raise SystemExit(
+                "--live needs GITHUB_TOKEN. Without a credential this would "
+                "decide and silently change nothing, which is worse than "
+                "refusing: you would believe it ran.")
+        if not args.repo:
+            raise SystemExit("--live needs --repo owner/name")
+        from berth.execute import ExecutionState
+        from berth.execute import execute as do_execute
+        from berth.github import GitHubClient, open_proposal
+        client = GitHubClient(token)
+        target = decl.repo_target(*args.repo.split("/", 1))
+        exec_state = ExecutionState()
+
+        def deliver(proposal, policy):
+            from berth.execute import AutonomyPolicy
+            return do_execute(client, target, proposal,
+                              policy or AutonomyPolicy(), exec_state,
+                              open_proposal_fn=open_proposal)
+
+    result = run(decl.classes, resolve, detect, state=ags,
+                 shadow=not args.live, deliver=deliver,
+                 autonomy=decl.autonomy)
 
     mode = "LIVE" if args.live else "shadow"
-    print(f"{mode}: {result.triggers_seen} triggers, "
-          f"{len(result.proposals)} proposals, "
-          f"rate {result.proposal_rate:.0%}")
+    print(f"{mode}: {len(decl.classes)} classes, {result.triggers_seen} "
+          f"triggers, {len(result.proposals)} proposals, "
+          f"{result.moved} executed")
     if result.triggers_seen and result.proposal_rate < 0.25:
-        print("  Below the 0.25 kill criterion. Sustained, that means the "
-              "trigger set is wrong and the agent is noise.")
+        print("  Below the 0.25 kill criterion. Sustained, the trigger set is "
+              "wrong and the agent is noise rather than coverage.")
+    for src, why in sorted(ws.unreachable.items()):
+        print(f"  UNREACHABLE {src}: {why[:70]}")
     for cls, why in result.suppressed:
         print(f"  silent  {cls}: {why}")
+    for cls, why in skipped:
+        print(f"  SKIPPED {cls}: {why[:70]}")
     for p in result.proposals:
-        print()
-        print(f"  {p.title}")
+        print(f"\n  {p.title}")
         for line in p.config_diff.splitlines():
             print(f"    {line}")
+    for r in getattr(result, "executions", []):
+        verb = "EXECUTED" if r.executed else "held"
+        print(f"\n  {verb}  {r.workload_class}: {r.reason}")
+
     if args.state:
-        with open(args.state, "w") as f:
-            _json.dump({"model_versions": wstate.model_versions,
-                        "prices": wstate.prices}, f, indent=2)
+        Path(args.state).write_text(_json.dumps({
+            "model_versions": ws.model_versions,
+            "stack_versions": ws.stack_versions,
+            "prices": ws.prices,
+            "corpus_cells": sorted(ws.corpus_cells)}, indent=2))
     return 0
 
 
@@ -277,6 +347,7 @@ def cmd_versus(args):
     work would cost on hardware they would rent is not.
     """
     import json as _json
+    from dataclasses import asdict
 
     from berth.versus import ApiOffer, compare, render
     with open(args.offers) as f:
@@ -286,11 +357,8 @@ def cmd_versus(args):
                 requests_per_hour=args.requests_per_hour,
                 api_offers=offers, concurrency=args.concurrency,
                 engineering_cost_per_hour=args.engineering_per_hour)
-    if args.json:
-        from dataclasses import asdict
-        print(_json.dumps(asdict(c), indent=2, default=str))
-    else:
-        print(render(c))
+    print(_json.dumps(asdict(c), indent=2, default=str) if args.json
+          else render(c))
     return 0
 
 
@@ -355,9 +423,12 @@ def build_parser():
     pi.add_argument("--classes", required=True,
                     help="JSON file of watched workload classes")
     pi.add_argument("--state", help="file to persist watcher state between runs")
+    pi.add_argument("--repo", help="owner/name, required with --live")
     pi.add_argument("--live", action="store_true",
-                    help="open pull requests. Default is shadow: read what it "
-                         "would have said before letting it say anything.")
+                    help="open pull requests and execute where the declared "
+                         "autonomy policy permits. Needs GITHUB_TOKEN and "
+                         "--repo. Default is shadow: decide, record, touch "
+                         "nothing.")
     pi.set_defaults(func=cmd_pilot)
 
     ho = sub.add_parser("holdout",

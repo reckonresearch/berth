@@ -13,9 +13,25 @@ pip install berth-placement
 ./bench/p0_run.sh <silicon> <model> <model-id>
 ```
 
-Send the tarball and the exact server command. The command matters: the same
-card and model under two vLLM versions has measured over twice the throughput,
-so a trace without it is a trace we cannot place.
+**Where to send it.** Open a pull request adding the file to
+`data/contributed/`. CI runs `python -m bench.check_contributed` and rejects
+any file containing a mock record or any record without explicit provenance.
+If a pull request is awkward, open an issue with the
+[measurement template](https://github.com/reckonresearch/berth/issues/new?template=measurement.md)
+and attach it, or email traces@reckonresearch.com.
+
+Send the run conditions alongside the traces. `sounding` writes them to
+`traces.jsonl.meta.json` and prints a reminder, because a trace without its
+conditions is a number without a denominator.
+
+**The exact server command matters more than it looks.** The same card and
+model under two vLLM versions has measured over twice the throughput, so a
+trace without the launch command is a trace we cannot place.
+
+**What happens then.** The gate runs in CI, so you find out in minutes rather
+than waiting on us. A cell that passes is published with your attribution and
+its provenance, and it enters the corpus that every estimate is checked
+against. A cell that fails tells you which line and why.
 
 The harness records what it can verify and refuses to guess at the rest. It
 reads hardware identity where the server is local, verifies the served model

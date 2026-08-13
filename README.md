@@ -48,8 +48,9 @@ learned components, roughly a page of arithmetic.
 imports the estimator, enforced by test: evidence that cannot be separated
 from the thing it evaluates is not evidence.
 
-**pilot** watches for change, re-decides, and proves what the change saved. It
-never touches a request.
+**pilot** watches for change, moves the workload, and proves what the move
+saved. It routes at the workload level, by programming your infrastructure
+rather than by carrying your traffic.
 
 ## What we found
 
@@ -117,10 +118,18 @@ no price, not a low one.
 the answer, and most teams decide once and never look again.
 
 `pilot` closes that loop. It watches model registries, serving-stack releases,
-provider prices and the corpus; re-estimates when something moves; and opens a
-pull request against your deployment config with the diff and the evidence
-attached. It cannot merge, cannot write to a default branch, and cannot touch
-a path you did not declare.
+provider prices and the corpus; re-estimates when something moves; and, where
+your declared autonomy policy permits, moves the workload.
+
+The change lands as a pull request against your deployment config, carrying
+the diff and the evidence. Under a policy you committed in advance, pilot
+merges it and your delivery pipeline moves the workload. Without one, it opens
+the pull request and stops.
+
+It cannot write to a default branch, cannot touch a path you did not declare,
+and cannot merge without the policy that permitted it recorded in the merge
+commit. Reverting a move is reverting a commit, and deleting
+`.berth/classes.yaml` stops everything.
 
 Most passes produce nothing, and that is the design. An agent that proposes
 every week gets muted, and a muted agent is worse than none because it looks
@@ -148,13 +157,14 @@ prints says which.
 
 ## When it is wrong
 
-[`DEFECTS.md`](https://github.com/reckonresearch/berth/blob/main/DEFECTS.md) is the register: eleven instrument failures, what
+[`DEFECTS.md`](https://github.com/reckonresearch/berth/blob/main/DEFECTS.md) is the register: fourteen instrument failures, what
 caused each, how it was caught, and the test that fails if it returns.
 
 Four let bad data through. **Seven rejected good data**, which is the more
-dangerous direction: a false negative is caught downstream eventually, and a
-false positive is silent. One of them nearly discarded the most valuable cell
-in the corpus.
+dangerous direction, because a false negative is caught downstream eventually
+and a false positive is silent. One of them nearly discarded the most valuable
+cell in the corpus. **Three were correct code that nothing could reach**, which
+no unit test can catch.
 
 Only physical impossibility refuses a file. Everything else prints and passes.
 
