@@ -235,7 +235,14 @@ def cmd_pilot(args):
     path = Path(args.classes)
     if not path.exists():
         raise SystemExit(f"no declaration at {path}")
-    decl = load_yaml(path.read_text(), repo=args.repo or "")
+    from berth.declaration import DeclarationError
+    try:
+        decl = load_yaml(path.read_text(), repo=args.repo or "")
+    except DeclarationError as e:
+        # The parser's messages are precise and name the class and the field.
+        # Letting them arrive as a traceback buries a good error inside a
+        # stack the reader has to parse to find it.
+        raise SystemExit(f"{path}: {e}") from None
 
     ws = WatchState()
     ags = AgentState()
