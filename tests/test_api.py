@@ -125,3 +125,59 @@ def test_it_binds_to_loopback_by_default():
 
     from berth.api import serve
     assert inspect.signature(serve).parameters["host"].default == "127.0.0.1"
+
+
+# -- the CLI paths a customer actually runs ---------------------------------
+
+def test_pilot_reads_a_yaml_declaration(tmp_path):
+    """cmd_pilot used json.load on a file that is YAML, so the command every
+    customer would run to use pilot crashed on its first line. The declaration
+    parser existed and the CLI never called it."""
+    from berth.cli import build_parser
+    d = tmp_path / "classes.yaml"
+    d.write_text("""version: 1
+repo:
+  allowed_paths: [d.yaml]
+classes:
+  - name: v
+    model_id: o/m
+    model: llama3-8b
+    running_on: h100-pcie
+    config_path: d.yaml
+    slo: {metric: p99_ttft_ms, bound_ms: 800}
+    workload: {concurrency: 8, prompt_tokens: 512, output_tokens: 128}
+""")
+    args = build_parser().parse_args(["pilot", "--classes", str(d)])
+    assert args.func(args) == 0
+
+
+def test_live_without_a_token_refuses_rather_than_doing_nothing(tmp_path):
+    """Without a credential this would decide and silently change nothing,
+    which is worse than refusing: you would believe it ran."""
+    import os
+
+    import pytest
+
+    from berth.cli import build_parser
+    d = tmp_path / "c.yaml"
+    d.write_text("""version: 1
+repo:
+  allowed_paths: [d.yaml]
+classes:
+  - name: v
+    model_id: o/m
+    model: llama3-8b
+    running_on: h100-pcie
+    config_path: d.yaml
+    slo: {metric: p99_ttft_ms, bound_ms: 800}
+    workload: {concurrency: 8, prompt_tokens: 512, output_tokens: 128}
+""")
+    old = os.environ.pop("GITHUB_TOKEN", None)
+    try:
+        args = build_parser().parse_args(
+            ["pilot", "--classes", str(d), "--live", "--repo", "a/b"])
+        with pytest.raises(SystemExit, match="GITHUB_TOKEN"):
+            args.func(args)
+    finally:
+        if old:
+            os.environ["GITHUB_TOKEN"] = old
