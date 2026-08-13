@@ -141,11 +141,51 @@ class GitHubClient:
                            "base": repo.default_branch})
 
     def merge(self, *_a, **_kw):
-        """Never. Present so the refusal is explicit rather than an absence."""
+        """Refused. Merging requires a declared policy, so use merge_proposal.
+
+        This raised unconditionally when pilot was proposal-only. It still
+        raises, because an unqualified merge is a merge with no authorization
+        attached, and the whole design is that authorization is declared in
+        advance rather than assumed at the call site.
+        """
         raise RefusedByPolicy(
-            "this integration does not merge. The agent proposes and the "
-            "customer disposes, and that boundary is in the contract as well "
-            "as here.")
+            "merge() has no authorization attached. Execution goes through "
+            "merge_proposal, which requires the autonomy policy that "
+            "permitted it, so the reason a change landed unattended is "
+            "recorded with the change.")
+
+    def merge_proposal(self, repo: RepoTarget, opened: dict, *,
+                       policy_reason: str):
+        """Merge a pull request this integration opened, under a policy.
+
+        Three things make this safe, and all three are structural.
+
+        It merges a pull request rather than pushing to a branch, so the
+        change lands as a reviewable commit with the diff and the evidence
+        attached, and reverting it is reverting a commit.
+
+        It requires the policy reason, which is written into the merge commit.
+        A change that landed unattended should say on its face which rule
+        allowed it.
+
+        And the authorization lives in the customer's repository, committed by
+        them. pilot has no standing permission to write to a default branch:
+        it has permission to merge a pull request it opened, for a class whose
+        declared policy allows it.
+        """
+        if not policy_reason:
+            raise RefusedByPolicy(
+                "a merge without a policy reason is a merge nobody authorised")
+        number = opened.get("number")
+        if not number:
+            raise GitHubError("no pull request number to merge")
+        return self._call(
+            "PUT", f"/repos/{repo.owner}/{repo.name}/pulls/{number}/merge",
+            {"merge_method": "squash",
+             "commit_title": f"placement: {opened.get('title', 'automated move')}",
+             "commit_message": f"Executed under declared autonomy policy.\n\n"
+                               f"{policy_reason}\n\n"
+                               f"Revert this commit to undo the move."})
 
 
 # ------------------------------------------------------------------ apply
