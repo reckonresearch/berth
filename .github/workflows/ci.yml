@@ -67,7 +67,10 @@ jobs:
           assert d.allowed_paths, 'allowed_paths empty'
           print(f'parsed {len(d.classes)} class(es) with the minimal reader')"
       - name: Every published example parses
-        run: python -m pytest tests/test_declaration.py -q
+        # Deselect rather than skip. A test that skips because somebody forgot
+        # to install something and a test deselected because it does not apply
+        # look identical in a summary line, and the difference is the point.
+        run: python -m pytest tests/test_declaration.py -q -m "not needs_pyyaml"
       - name: The CLI runs
         run: |
           berth list > /dev/null

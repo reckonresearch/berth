@@ -217,6 +217,7 @@ classes:
     assert c["workload"]["concurrency"] == 8
 
 
+@pytest.mark.needs_pyyaml
 def test_both_parsers_agree_on_the_published_example():
     """The two readers must not disagree. A declaration that means one thing
     with PyYAML installed and another without it is worse than either being
@@ -227,10 +228,15 @@ def test_both_parsers_agree_on_the_published_example():
     where the divergence lives. A skipped test reads as a passing test in
     every summary line anyone looks at.
 
-    It now fails rather than skipping, because PyYAML is a dev dependency and
-    its absence in a test environment is a broken environment rather than a
-    supported configuration. The dependency-free path is covered by the tests
-    above, which use the minimal reader directly and need nothing installed.
+    importorskip was the wrong tool because nothing guaranteed the test ever
+    ran anywhere. A hard import is also wrong: this test cannot run without
+    PyYAML by definition, and the no-optional-deps job runs this file.
+
+    The marker states the requirement, so the job that has PyYAML runs it and
+    the job that does not deselects it explicitly. A test that skips because
+    somebody forgot to install something and a test that is deselected because
+    it does not apply look identical in a summary line, and the difference is
+    the whole point.
     """
     import yaml
 

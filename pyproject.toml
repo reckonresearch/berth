@@ -51,6 +51,12 @@ dev = ["pytest>=8", "pyyaml>=6"]
 include = ["berth*", "bench*"]
 
 [tool.pytest.ini_options]
+markers = [
+  # Declared so a typo in a marker name is an error rather than a
+  # warning. An unregistered marker silently selects nothing, which
+  # reads as a passing run.
+  "needs_pyyaml: requires PyYAML. Deselected by the no-optional-deps job.",
+]
 testpaths = ["tests"]
 
 [tool.ruff]
