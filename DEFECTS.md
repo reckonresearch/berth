@@ -374,6 +374,34 @@ existing.
 
 ---
 
+## 15. The parser a customer without PyYAML gets
+
+**Mechanism:** environment. **Direction:** rejected correct data.
+
+The core has no dependencies, so `load_yaml` falls back to a minimal reader
+when PyYAML is absent. That reader returned a flow sequence as a string, so
+`allowed_paths: [deploy/voice.yaml]` became the characters of that string. The
+membership check then refused every `config_path` as undeclared, with an error
+blaming the customer's file.
+
+Flow mappings were wrong the same way, so `slo` and `workload` were unreadable
+too. Every example we publish uses both forms.
+
+**Nothing caught it because every test ran where PyYAML was installed.** CI
+does not install it, which is why CI failed on a suite that passed everywhere
+else, and why two days were nearly spent treating a real defect as a reporting
+artifact.
+
+**Rule: a fallback path needs a test that takes it.** A branch selected by the
+environment is a branch nobody exercises until a customer has the environment
+that selects it.
+
+**Pinned by:** `test_the_fallback_parser_reads_the_format_we_publish`,
+`test_both_parsers_agree_on_the_published_example`, and
+`test_the_full_declaration_parses_without_pyyaml`.
+
+---
+
 ## What actually prevents the next one
 
 **Physical impossibility, not statistical thresholds.** A card cannot exceed
