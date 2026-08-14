@@ -282,6 +282,35 @@ def _minimal_yaml(text: str):
         v = v.strip()
         if v.startswith(("'", '"')) and v[-1] == v[0]:
             return v[1:-1]
+
+        # Flow sequences, [a, b, c]. Returning these as a string was a real
+        # defect rather than a missing feature: allowed_paths is written this
+        # way in every example we publish, and the string then iterated as
+        # characters, so every config_path was refused as undeclared. A
+        # customer without PyYAML hit it on their first declaration, and the
+        # error blamed their file.
+        if v.startswith("[") and v.endswith("]"):
+            inner = v[1:-1].strip()
+            if not inner:
+                return []
+            return [scalar(part) for part in inner.split(",")]
+
+        # Flow mappings, {k: v}. Used for slo and workload in every example.
+        if v.startswith("{") and v.endswith("}"):
+            inner = v[1:-1].strip()
+            if not inner:
+                return {}
+            out = {}
+            for part in inner.split(","):
+                k, sep, val = part.partition(":")
+                if not sep:
+                    raise DeclarationError(
+                        f"cannot read {v!r}: {part.strip()!r} is not a "
+                        f"key: value pair. Install PyYAML for the full "
+                        f"format.")
+                out[k.strip()] = scalar(val)
+            return out
+
         if re.fullmatch(r"-?\d+", v):
             return int(v)
         if re.fullmatch(r"-?\d+\.\d+", v):
