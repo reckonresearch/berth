@@ -402,6 +402,37 @@ that selects it.
 
 ---
 
+## 16. A claim that named the wrong cause
+
+**Mechanism:** analysis. **Direction:** overstated.
+
+Every external artifact said the same model can cost 40x more in one
+placement than another. The homepage rendered it as two services with specific
+prices, which reads as a measurement of two deployments.
+
+Silicon choice alone, across measured cells, with both placements meeting the
+bound, supports **3.4x**. The 42x figure is a spread across workload shape,
+and every service in it is already on its cheapest feasible placement.
+
+The number was right and the cause was wrong, which is the harder error to
+catch: the arithmetic checks out and the sentence is false. It went into the
+homepage, the README, the docs and a reply to an external reviewer without
+anyone asking which comparison produced it.
+
+**Rule: a headline number needs the comparison that produced it written down
+next to it.** A figure with no stated basis will acquire one from whoever
+repeats it.
+
+The corrected claim is stronger. A spread that survives everyone already
+choosing correctly is a better argument for the unit than one that only
+punishes a bad hardware choice.
+
+**Pinned by:** the measured-cell spread is reproducible from
+`berth.place.decide` across the corpus, and the copy now names shape as the
+cause.
+
+---
+
 ## What actually prevents the next one
 
 **Physical impossibility, not statistical thresholds.** A card cannot exceed

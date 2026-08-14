@@ -220,9 +220,19 @@ classes:
 def test_both_parsers_agree_on_the_published_example():
     """The two readers must not disagree. A declaration that means one thing
     with PyYAML installed and another without it is worse than either being
-    wrong, because the difference is invisible until it changes behaviour."""
-    import pytest
-    yaml = pytest.importorskip("yaml")
+    wrong, because the difference is invisible until it changes behaviour.
+
+    This used importorskip, so in an environment without PyYAML it skipped:
+    the one test that catches a divergence between the readers did not run
+    where the divergence lives. A skipped test reads as a passing test in
+    every summary line anyone looks at.
+
+    It now fails rather than skipping, because PyYAML is a dev dependency and
+    its absence in a test environment is a broken environment rather than a
+    supported configuration. The dependency-free path is covered by the tests
+    above, which use the minimal reader directly and need nothing installed.
+    """
+    import yaml
 
     from berth.declaration import _minimal_yaml
     text = """version: 1

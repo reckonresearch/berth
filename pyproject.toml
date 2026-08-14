@@ -41,7 +41,11 @@ pilot = "berth.pilot_cli:main"
 berth-api = "berth.api:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+# PyYAML is a test dependency, not a runtime one. The package itself has no
+# dependencies by design and reads declarations with a minimal parser when
+# PyYAML is absent. Both readers must be exercised, so the suite needs the
+# library present and a separate job runs without it.
+dev = ["pytest>=8", "pyyaml>=6"]
 
 [tool.setuptools.packages.find]
 include = ["berth*", "bench*"]
