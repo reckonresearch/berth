@@ -1,6 +1,10 @@
-# berth
+# Reckon Research
 
 **Adaptive placement infrastructure for AI inference.**
+
+**berth** predicts what a workload costs on a given accelerator.
+**sounding** measures the real thing and checks the prediction.
+**pilot** watches for change, moves the workload, and proves what the move saved.
 
 Predict what a workload costs and how fast it runs on a given accelerator,
 before you rent it.

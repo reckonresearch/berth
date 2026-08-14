@@ -185,3 +185,75 @@ def test_volume_is_declared_and_optional():
     assert parse(raw).classes[0].mtok_per_hour == 12.5
     del raw["classes"][0]["workload"]["mtok_per_hour"]
     assert parse(raw).classes[0].mtok_per_hour is None
+
+
+# -- the parser a customer without PyYAML gets ------------------------------
+
+def test_the_fallback_parser_reads_the_format_we_publish():
+    """The core has no dependencies, so a declaration is read by a minimal
+    parser when PyYAML is absent. That parser returned flow sequences as
+    strings, so allowed_paths became the characters of '[deploy/v.yaml]' and
+    every config_path was refused as undeclared.
+
+    A customer without PyYAML hit it on their first declaration, and the error
+    blamed their file. Nothing caught it because every test ran in an
+    environment where PyYAML was installed.
+    """
+    from berth.declaration import _minimal_yaml
+    raw = _minimal_yaml("""version: 1
+repo:
+  allowed_paths: [deploy/voice.yaml, deploy/chat.yaml]
+classes:
+  - name: voice
+    config_path: deploy/voice.yaml
+    slo: {metric: p99_ttft_ms, bound_ms: 800}
+    workload: {concurrency: 8, prompt_tokens: 512, output_tokens: 128}
+""")
+    assert raw["repo"]["allowed_paths"] == ["deploy/voice.yaml",
+                                            "deploy/chat.yaml"]
+    c = raw["classes"][0]
+    assert c["config_path"] == "deploy/voice.yaml"
+    assert c["slo"] == {"metric": "p99_ttft_ms", "bound_ms": 800}
+    assert c["workload"]["concurrency"] == 8
+
+
+def test_both_parsers_agree_on_the_published_example():
+    """The two readers must not disagree. A declaration that means one thing
+    with PyYAML installed and another without it is worse than either being
+    wrong, because the difference is invisible until it changes behaviour."""
+    import pytest
+    yaml = pytest.importorskip("yaml")
+
+    from berth.declaration import _minimal_yaml
+    text = """version: 1
+repo:
+  allowed_paths: [deploy/voice.yaml]
+classes:
+  - name: voice
+    model_id: org/model
+    model: llama3-8b
+    running_on: h100-pcie
+    config_path: deploy/voice.yaml
+    slo: {metric: p99_ttft_ms, bound_ms: 800}
+    workload: {concurrency: 8, prompt_tokens: 512, output_tokens: 128}
+"""
+    assert _minimal_yaml(text) == yaml.safe_load(text)
+
+
+def test_the_full_declaration_parses_without_pyyaml():
+    """End to end through the parser a dependency-free install would use."""
+    from berth.declaration import _minimal_yaml, parse
+    d = parse(_minimal_yaml("""version: 1
+repo:
+  allowed_paths: [deploy/voice.yaml]
+classes:
+  - name: voice
+    model_id: org/model
+    model: llama3-8b
+    running_on: h100-pcie
+    config_path: deploy/voice.yaml
+    slo: {metric: p99_ttft_ms, bound_ms: 800}
+    workload: {concurrency: 8, prompt_tokens: 512, output_tokens: 128}
+"""), repo="acme/infra")
+    assert d.classes[0].workload_class == "voice"
+    assert d.allowed_paths == ("deploy/voice.yaml",)
