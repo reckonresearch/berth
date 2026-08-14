@@ -33,3 +33,46 @@ jobs:
       - run: pip install dist/*.whl
       - run: berth --help
       - run: berth list
+
+  # The package has no runtime dependencies by design, so the code a
+  # dependency-free customer runs is a different code path from the one the
+  # main suite exercises. That path shipped broken: the minimal YAML reader
+  # could not parse a single declaration in our own documentation, and no test
+  # caught it because every environment had PyYAML installed.
+  #
+  # This job installs nothing optional and runs the tests that must pass
+  # without it. Both readers are now exercised by design rather than by
+  # accident of environment.
+  no-optional-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pytest
+      - name: PyYAML must genuinely be absent
+        run: |
+          python -c "
+          import importlib.util, sys
+          if importlib.util.find_spec('yaml'):
+              sys.exit('PyYAML is installed; this job proves nothing')
+          print('PyYAML absent, as intended')"
+      - name: The declaration reads without it
+        run: |
+          python -c "
+          from berth.declaration import load_yaml
+          d = load_yaml(open('.berth/classes.yaml').read(), repo='a/b')
+          assert d.classes, 'no classes parsed'
+          assert d.allowed_paths, 'allowed_paths empty'
+          print(f'parsed {len(d.classes)} class(es) with the minimal reader')"
+      - name: Every published example parses
+        # Deselect rather than skip. A test that skips because somebody forgot
+        # to install something and a test deselected because it does not apply
+        # look identical in a summary line, and the difference is the point.
+        run: python -m pytest tests/test_declaration.py -q -m "not needs_pyyaml"
+      - name: The CLI runs
+        run: |
+          berth list > /dev/null
+          berth estimate --model llama3-8b --batch 8 > /dev/null
+          berth pilot --classes .berth/classes.yaml > /dev/null

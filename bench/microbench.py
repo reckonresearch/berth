@@ -22,7 +22,18 @@ def main():
     p.add_argument("--iters", type=int, default=50)
     args = p.parse_args()
 
-    import torch  # lazy: only needed on the accelerator box
+    # Lazy: only needed on the accelerator box. Guarded because this script
+    # is run by operators on whatever machine they have to hand, and an
+    # unguarded import turned "no accelerator here" into a traceback. The
+    # skip path is declared, documented and tested, so it has to be reachable
+    # without torch installed as well as without a device visible.
+    try:
+        import torch
+    except ImportError:
+        print("torch is not installed, so there is nothing to measure. "
+              "Install it on the machine with the accelerator and run this "
+              "there; a ceiling measured anywhere else is not a ceiling.")
+        return 2
 
     # Backend detection rather than assuming CUDA. ROCm presents itself
     # through torch.cuda, so AMD needs nothing special. TPU is XLA and
@@ -100,4 +111,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The skip path returns 2 and it has to reach the shell, or a caller
+    # cannot tell "nothing to measure" from "measured and found nothing".
+    raise SystemExit(main() or 0)
